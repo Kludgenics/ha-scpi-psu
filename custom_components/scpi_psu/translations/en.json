@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect SCPI Power Supply",
+        "description": "Configure a programmable SCPI power supply via any Home Assistant `serialx` path (`/dev/ttyUSB0`, `/dev/serial/by-id/...`, `socket://host:port`, `rfc2217://host:port`, or `esphome://...`).",
+        "data": {
+          "serial_port": "Serial Device Path or URI",
+          "name": "Device Name (optional, defaults to discovered model)",
+          "baudrate": "Baud Rate",
+          "profile": "SCPI Dialect Profile",
+          "max_voltage_clamp": "Safety Max Voltage Clamp (optional)",
+          "max_current_clamp": "Safety Max Current Clamp (optional)",
+          "scan_interval": "Poll Interval"
+        },
+        "data_description": {
+          "serial_port": "Examples: `/dev/ttyUSB0`, `socket://192.168.88.1:4001`, `rfc2217://192.168.1.10:4001`",
+          "max_voltage_clamp": "Hard upper ceiling enforced in both UI controls and SCPI commands (`VOLT` and `VOLT:LIM` / `VOLT:PROT`). Leave empty to use the model's hardware rating.",
+          "max_current_clamp": "Hard upper ceiling enforced in both UI controls and SCPI commands (`CURR` and `CURR:LIM` / `CURR:PROT`). Leave empty to use the model's hardware rating."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect or query the power supply at the specified serial URI."
+    },
+    "abort": {
+      "already_configured": "This power supply is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "SCPI Power Supply Options",
+        "description": "Update connection parameters, polling interval, or hardware safety clamps.",
+        "data": {
+          "serial_port": "Serial Device Path or URI",
+          "baudrate": "Baud Rate",
+          "profile": "SCPI Dialect Profile",
+          "max_voltage_clamp": "Safety Max Voltage Clamp (optional)",
+          "max_current_clamp": "Safety Max Current Clamp (optional)",
+          "scan_interval": "Poll Interval"
+        },
+        "data_description": {
+          "max_voltage_clamp": "Hard upper ceiling enforced in both UI controls and SCPI commands (`VOLT` and `VOLT:LIM` / `VOLT:PROT`). Clear to use the model's hardware rating.",
+          "max_current_clamp": "Hard upper ceiling enforced in both UI controls and SCPI commands (`CURR` and `CURR:LIM` / `CURR:PROT`). Clear to use the model's hardware rating."
+        }
+      }
+    }
+  }
+}

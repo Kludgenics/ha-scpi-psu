@@ -1,0 +1,13 @@
+{
+  "domain": "scpi_psu",
+  "name": "SCPI Power Supply",
+  "codeowners": ["@mgranberry"],
+  "config_flow": true,
+  "dependencies": ["usb"],
+  "documentation": "https://github.com/Kludgenics/ha-scpi-psu",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/Kludgenics/ha-scpi-psu/issues",
+  "requirements": ["serialx>=1.11.0"],
+  "version": "1.0.0"
+}
