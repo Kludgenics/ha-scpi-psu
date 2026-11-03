@@ -1,13 +1,13 @@
 # SCPI Programmable Power Supply for Home Assistant
 
-<img src="https://raw.githubusercontent.com/Kludgenics/ha-scpi-psu/main/images/icon.png" alt="SCPI Power Supply Logo" width="256px" height="256px" />
-
 [![HACS Validation](https://github.com/Kludgenics/ha-scpi-psu/actions/workflows/validate.yml/badge.svg)](https://github.com/Kludgenics/ha-scpi-psu/actions/workflows/validate.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/Kludgenics/ha-scpi-psu?style=flat-square)](https://github.com/Kludgenics/ha-scpi-psu/releases)
 [![HACS Badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
 A local-polling Home Assistant **Device** integration for programmable SCPI bench power supplies. Compatible with standard **IEEE 488.2 / SCPI** test and measurement instruments as well as high-performance vendor dialects (such as **OWON**, **Abestop**, **Kiprim**, and **Multicomp Pro**).
+
+<img src="https://raw.githubusercontent.com/Kludgenics/ha-scpi-psu/main/images/logo.png" alt="SCPI Power Supply" width="400px" />
 
 Built natively on Home Assistant's **`serialx`** async serial engine (`open_serial_connection` + `usb` proxy handlers), supporting:
 - **Local USB / UART serial adapters**: `/dev/ttyUSB0`, `/dev/serial/by-id/...`
@@ -46,37 +46,22 @@ Built natively on Home Assistant's **`serialx`** async serial engine (`open_seri
 | Category | Entity | Type | Description |
 | :--- | :--- | :--- | :--- |
 | **Controls** | `Output` | `switch` | Turns DC output ON/OFF (`OUTP ON` / `OUTP OFF`), synced with hardware state |
-| **Controls** | `Voltage Setpoint` | `number` | Output voltage setpoint (`VOLT`), bounded by hardware rating & safety clamp |
-| **Controls** | `Current Setpoint` | `number` | Constant-current setpoint (`CURR`), bounded by hardware rating & safety clamp |
-| **Sensors** | `Voltage` | `sensor` | Measured output terminal voltage (`V`) |
-| **Sensors** | `Current` | `sensor` | Measured output current (`A`) |
-| **Sensors** | `Power` | `sensor` | Measured output power (`W`) |
-| **Sensors** | `Status` | `sensor` | Operating state (`Constant Voltage (CV)`, `Constant Current (CC)`, `Standby / Output Off`, `Fault / Protection Trip`) |
-| **Sensors** | `Fault` | `binary_sensor` | `on` if any protection trip (OVP/OCP/OPP/Fault) is active |
-| **Config** | `Overvoltage Limit` | `number` | Hardware OVP trip threshold (`VOLT:LIM` / `VOLT:PROT`) |
-| **Config** | `Overcurrent Limit` | `number` | Hardware OCP trip threshold (`CURR:LIM` / `CURR:PROT`) |
-| **Config** | `Clear Fault` | `button` | Sends `*CLS` to clear latched protection trips/errors |
-| **Diagnostic** | `Connected` | `binary_sensor` | `serialx` transport & SCPI responsiveness status |
-| **Diagnostic** | `Overvoltage Protection (OVP)` | `binary_sensor` | Individual OVP trip indicator |
-| **Diagnostic** | `Overcurrent Protection (OCP)` | `binary_sensor` | Individual OCP trip indicator |
-| **Diagnostic** | `Overpower Protection (OPP)` | `binary_sensor` | Individual OPP trip indicator |
-| **Diagnostic** | `Error Register` | `sensor` | Raw `SYST:ERR?` diagnostic register |
+| **Settings** | `Voltage Target` | `number` | Voltage setpoint in Volts (e.g., `VOLT 13.80`) with hardware/software safety limits |
+| **Settings** | `Current Limit` | `number` | Current limit setpoint in Amperes (e.g., `CURR 3.00`) |
+| **Sensors** | `Voltage` | `sensor` (`voltage`, V) | Live measured output voltage |
+| **Sensors** | `Current` | `sensor` (`current`, A) | Live measured output current |
+| **Sensors** | `Power` | `sensor` (`power`, W) | Real-time output power calculated/polled from supply |
+| **Sensors** | `Mode` | `sensor` | Operating mode: `Constant Voltage (CV)`, `Constant Current (CC)`, or `OFF` |
 
 ---
 
-## Installation
-
-### Method 1: HACS (Recommended)
+## Installation via HACS
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Kludgenics&repository=ha-scpi-psu&category=integration)
 
 1. Click the **Add to HACS** button above, or manually add `https://github.com/Kludgenics/ha-scpi-psu` as a custom repository under **HACS** → **Integrations** → **Custom repositories** (Category: `Integration`).
-2. Download **SCPI Power Supply** and restart Home Assistant.
-
-### Method 2: Manual Installation
-
-1. Copy `custom_components/scpi_psu` into your Home Assistant `<config_dir>/custom_components/` directory.
-2. Restart Home Assistant.
+2. Search for **SCPI Power Supply** and click **Download**.
+3. Restart Home Assistant.
 
 ---
 
@@ -84,9 +69,9 @@ Built natively on Home Assistant's **`serialx`** async serial engine (`open_seri
 
 [![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=scpi_psu)
 
-1. In Home Assistant, go to **Settings** → **Devices & Services** → **Add Integration** and search for **SCPI Power Supply** (or click the badge above).
-2. Enter your serial path or socket URL:
-   - Local: `/dev/ttyUSB0` or `/dev/serial/by-id/...`
-   - TCP Bridge (e.g. MikroTik or ser2net): `socket://192.168.88.1:4001`
-   - RFC2217 Bridge: `rfc2217://192.168.88.1:4001`
-3. (Optional) Set safety voltage/current limits and custom polling interval.
+1. Navigate to **Settings** → **Devices & Services** → **Add Integration**.
+2. Search for **SCPI Power Supply**.
+3. Select your serial port or enter a socket connection:
+   - For USB adapters: select `/dev/serial/by-id/...` or `/dev/ttyUSB0`
+   - For MikroTik / ser2net: `socket://192.168.88.1:4001` or `rfc2217://192.168.88.1:4001`
+4. Confirm communication and adjust default voltage/current clamp limits.
