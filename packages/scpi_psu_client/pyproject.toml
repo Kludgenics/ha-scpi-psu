@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scpi-psu"
+version = "1.0.0"
+description = "Async SCPI client for programmable bench power supplies"
+readme = "README.md"
+authors = [{ name = "Matthias Granberry", email = "matthias@kludgenics.com" }]
+license = { text = "MIT" }
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Hardware",
+]
+dependencies = [
+    "serialx>=1.11.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Kludgenics/ha-scpi-psu"
+Issues = "https://github.com/Kludgenics/ha-scpi-psu/issues"
