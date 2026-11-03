@@ -9,9 +9,13 @@ import voluptuous as vol
 
 from serialx import Parity, SerialException, StopBits, open_serial_connection
 
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 
 from .const import (
@@ -36,7 +40,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def _async_probe_psu(serial_url: str, baudrate: int) -> PsuIdentity:
-    """Open serialx connection, query *IDN? (or MEAS:VOLT?), and return parsed PsuIdentity."""
+    """Open serialx connection, query *IDN?, and return parsed PsuIdentity."""
     reader, writer = await asyncio.wait_for(
         open_serial_connection(
             url=serial_url,
@@ -87,54 +91,40 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    def __init__(self) -> None:
+        """Initialize the config flow state."""
+        self._serial_url: str | None = None
+        self._baudrate: int = DEFAULT_BAUDRATE
+        self._identity: PsuIdentity | None = None
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle the initial setup step."""
+    ) -> ConfigFlowResult:
+        """Step 1: Discover and select serial port and baudrate."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            serial_url = user_input[CONF_SERIAL_PORT].strip()
-            baudrate = int(user_input[CONF_BAUDRATE])
+            self._serial_url = user_input[CONF_SERIAL_PORT].strip()
+            self._baudrate = int(user_input[CONF_BAUDRATE])
 
             try:
-                identity = await _async_probe_psu(serial_url, baudrate)
+                self._identity = await _async_probe_psu(self._serial_url, self._baudrate)
             except (OSError, SerialException, TimeoutError) as err:
-                _LOGGER.warning("Failed to probe SCPI PSU at %s: %s", serial_url, err)
+                _LOGGER.warning("Failed to probe SCPI PSU at %s: %s", self._serial_url, err)
                 errors["base"] = "cannot_connect"
             else:
                 unique_key = (
-                    f"{identity.manufacturer}_{identity.model}_{identity.serial_number}".lower()
-                    if identity.serial_number
-                    else f"serialx_{serial_url}"
+                    f"{self._identity.manufacturer}_{self._identity.model}_{self._identity.serial_number}".lower()
+                    if self._identity.serial_number
+                    else f"serialx_{self._serial_url}"
                 )
                 await self.async_set_unique_id(unique_key)
                 self._abort_if_unique_id_configured()
-
-                custom_name = (user_input.get(CONF_NAME) or "").strip()
-                title = custom_name if custom_name else identity.default_title
-
-                v_clamp = _clean_optional_float(user_input.get(CONF_MAX_VOLTAGE_CLAMP))
-                i_clamp = _clean_optional_float(user_input.get(CONF_MAX_CURRENT_CLAMP))
-
-                data: dict[str, Any] = {
-                    CONF_SERIAL_PORT: serial_url,
-                    CONF_BAUDRATE: baudrate,
-                    CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
-                    CONF_PROFILE: user_input.get(CONF_PROFILE, PROFILE_AUTO),
-                    CONF_IDN: identity.raw_idn,
-                }
-                if v_clamp is not None:
-                    data[CONF_MAX_VOLTAGE_CLAMP] = v_clamp
-                if i_clamp is not None:
-                    data[CONF_MAX_CURRENT_CLAMP] = i_clamp
-
-                return self.async_create_entry(title=title, data=data)
+                return await self.async_step_confirm()
 
         schema = vol.Schema(
             {
                 vol.Required(CONF_SERIAL_PORT): selector.SerialPortSelector(),
-                vol.Optional(CONF_NAME): selector.TextSelector(),
                 vol.Required(
                     CONF_BAUDRATE, default=DEFAULT_BAUDRATE
                 ): selector.NumberSelector(
@@ -142,6 +132,47 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
                         min=1200, max=921600, step=1, mode=selector.NumberSelectorMode.BOX
                     )
                 ),
+            }
+        )
+
+        return self.async_show_form(
+            step_id="user", data_schema=schema, errors=errors
+        )
+
+    async def async_step_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 2: Confirm device options, friendly name, and safety clamps."""
+        assert self._identity is not None
+        assert self._serial_url is not None
+
+        if user_input is not None:
+            custom_name = (user_input.get(CONF_NAME) or "").strip()
+            title = custom_name if custom_name else self._identity.default_title
+
+            v_clamp = _clean_optional_float(user_input.get(CONF_MAX_VOLTAGE_CLAMP))
+            i_clamp = _clean_optional_float(user_input.get(CONF_MAX_CURRENT_CLAMP))
+
+            data: dict[str, Any] = {
+                CONF_SERIAL_PORT: self._serial_url,
+                CONF_BAUDRATE: self._baudrate,
+                CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL,
+                CONF_PROFILE: user_input.get(CONF_PROFILE, PROFILE_AUTO),
+                CONF_IDN: self._identity.raw_idn,
+            }
+            if v_clamp is not None:
+                data[CONF_MAX_VOLTAGE_CLAMP] = v_clamp
+            if i_clamp is not None:
+                data[CONF_MAX_CURRENT_CLAMP] = i_clamp
+
+            return self.async_create_entry(title=title, data=data)
+
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_NAME,
+                    description={"suggested_value": self._identity.default_title},
+                ): selector.TextSelector(),
                 vol.Required(
                     CONF_PROFILE, default=PROFILE_AUTO
                 ): selector.SelectSelector(
@@ -180,22 +211,17 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
                         mode=selector.NumberSelectorMode.BOX,
                     )
                 ),
-                vol.Required(
-                    CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=1,
-                        max=60,
-                        step=1,
-                        unit_of_measurement="s",
-                        mode=selector.NumberSelectorMode.BOX,
-                    )
-                ),
             }
         )
 
         return self.async_show_form(
-            step_id="user", data_schema=schema, errors=errors
+            step_id="confirm",
+            data_schema=schema,
+            description_placeholders={
+                "model": self._identity.default_title,
+                "serial_number": self._identity.serial_number or "N/A",
+                "firmware": self._identity.firmware or "Unknown",
+            },
         )
 
     @staticmethod
@@ -214,7 +240,7 @@ class ScpiPsuOptionsFlow(OptionsFlow):
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Manage options."""
         errors: dict[str, str] = {}
         current_cfg = {**self._entry.data, **self._entry.options}

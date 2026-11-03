@@ -3,18 +3,25 @@
     "step": {
       "user": {
         "title": "Connect SCPI Power Supply",
-        "description": "Configure a programmable SCPI power supply via any Home Assistant `serialx` path (`/dev/ttyUSB0`, `/dev/serial/by-id/...`, `socket://host:port`, `rfc2217://host:port`, or `esphome://...`).",
+        "description": "Select the serial device or enter a remote serial URI (`socket://host:port`, `rfc2217://host:port`, or `esphome://...`).",
         "data": {
           "serial_port": "Serial Device Path or URI",
-          "name": "Device Name (optional, defaults to discovered model)",
-          "baudrate": "Baud Rate",
-          "profile": "SCPI Dialect Profile",
-          "max_voltage_clamp": "Safety Max Voltage Clamp (optional)",
-          "max_current_clamp": "Safety Max Current Clamp (optional)",
-          "scan_interval": "Poll Interval"
+          "baudrate": "Baud Rate"
         },
         "data_description": {
-          "serial_port": "Examples: `/dev/ttyUSB0`, `socket://192.168.88.1:4001`, `rfc2217://192.168.1.10:4001`",
+          "serial_port": "Examples: `/dev/ttyUSB0`, `/dev/serial/by-id/...`, `socket://192.168.88.1:4001`"
+        }
+      },
+      "confirm": {
+        "title": "Configure {model}",
+        "description": "Successfully connected to {model} (Serial Number: {serial_number}, Firmware: {firmware}). You may customize the device name or configure optional safety clamps.",
+        "data": {
+          "name": "Device Name",
+          "profile": "SCPI Dialect Profile",
+          "max_voltage_clamp": "Safety Max Voltage Clamp (optional)",
+          "max_current_clamp": "Safety Max Current Clamp (optional)"
+        },
+        "data_description": {
           "max_voltage_clamp": "Hard upper ceiling enforced in both UI controls and SCPI commands (`VOLT` and `VOLT:LIM` / `VOLT:PROT`). Leave empty to use the model's hardware rating.",
           "max_current_clamp": "Hard upper ceiling enforced in both UI controls and SCPI commands (`CURR` and `CURR:LIM` / `CURR:PROT`). Leave empty to use the model's hardware rating."
         }
