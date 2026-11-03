@@ -1,0 +1,49 @@
+name: Nightly Prerelease
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  nightly:
+    name: Build & Publish Nightly Prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for New Commits Since Latest Tag
+        id: check_commits
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LATEST_TAG" ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            COMMITS_SINCE=$(git rev-list "${LATEST_TAG}..HEAD" --count)
+            if [ "$COMMITS_SINCE" -gt 0 ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Create Nightly Tag and Release
+        if: steps.check_commits.outputs.has_changes == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATE_TAG=$(date -u +"%Y%m%d")
+          TAG_NAME="v1.1.0b${DATE_TAG}"
+          echo "Creating nightly release ${TAG_NAME}"
+          git tag -f "$TAG_NAME"
+          git push origin -f "$TAG_NAME"
+          gh release create "$TAG_NAME" \
+            --title "Nightly Build ${TAG_NAME}" \
+            --notes "Automated nightly prerelease build from main branch (commit ${{ github.sha }})." \
+            --prerelease

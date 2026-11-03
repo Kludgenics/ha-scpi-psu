@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semantic version tag to release (e.g. v1.2.0)"
+        required: true
+        type: string
+      title:
+        description: "Release title"
+        required: false
+        type: string
+      notes:
+        description: "Release notes / changelog description"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate Prior to Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hassfest
+        uses: home-assistant/actions/hassfest@master
+      - name: HACS
+        uses: hacs/action@main
+        with:
+          category: integration
+          ignore: brands
+
+  release:
+    name: Publish Stable Release
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create Git Tag and GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.version }}
+          REL_TITLE: ${{ inputs.title }}
+          REL_NOTES: ${{ inputs.notes }}
+        run: |
+          TITLE="${REL_TITLE:-$TAG_NAME}"
+          NOTES="${REL_NOTES:-Release $TAG_NAME}"
+          git tag -f "$TAG_NAME"
+          git push origin -f "$TAG_NAME"
+          gh release create "$TAG_NAME" \
+            --title "$TITLE" \
+            --notes "$NOTES"
