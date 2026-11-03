@@ -1,8 +1,6 @@
 # SCPI Programmable Power Supply for Home Assistant
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Kludgenics/ha-scpi-psu/main/images/icon.png" width="160" height="160" alt="SCPI Power Supply Logo">
-</p>
+![SCPI Power Supply Logo](https://raw.githubusercontent.com/Kludgenics/ha-scpi-psu/main/images/icon.png)
 
 [![HACS Validation](https://github.com/Kludgenics/ha-scpi-psu/actions/workflows/validate.yml/badge.svg)](https://github.com/Kludgenics/ha-scpi-psu/actions/workflows/validate.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/Kludgenics/ha-scpi-psu?style=flat-square)](https://github.com/Kludgenics/ha-scpi-psu/releases)
