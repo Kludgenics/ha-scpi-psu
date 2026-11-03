@@ -43,6 +43,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Update Manifest Version and Commit
+        run: |
+          CLEAN_VER="${{ inputs.version }}"
+          CLEAN_VER="${CLEAN_VER#v}"
+          echo "Updating manifest.json version to $CLEAN_VER"
+          python3 -c "import json; p='custom_components/scpi_psu/manifest.json'; d=json.load(open(p)); d['version']='$CLEAN_VER'; json.dump(d, open(p,'w'), indent=2); open(p,'a').write('\n')"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add custom_components/scpi_psu/manifest.json
+          git commit -m "chore(release): bump manifest version to $CLEAN_VER" || echo "No changes to commit"
+          git push origin main
+
       - name: Create Git Tag and GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
