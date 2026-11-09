@@ -22,12 +22,14 @@ class ScpiPsuClient:
         serial_url: str,
         baudrate: int = 115200,
         initial_idn: str | None = None,
+        profile_key: str | None = None,
         command_delay: float = 0.10,
         write_delay: float = 0.15,
     ) -> None:
         self.serial_url = serial_url
         self.baudrate = baudrate
         self.identity: PsuIdentity = parse_idn(initial_idn)
+        self.configured_profile: str | None = profile_key
         self.command_delay = command_delay
         self.write_delay = write_delay
 
@@ -42,6 +44,8 @@ class ScpiPsuClient:
 
     @property
     def profile(self) -> ScpiProfile:
+        if self.configured_profile and self.configured_profile in PROFILES:
+            return PROFILES[self.configured_profile]
         return PROFILES.get(self.identity.profile_key, PROFILES["standard"])
 
     async def connect(self) -> None:

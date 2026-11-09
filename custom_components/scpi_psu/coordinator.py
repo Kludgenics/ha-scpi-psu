@@ -17,11 +17,13 @@ from .const import (
     CONF_IDN,
     CONF_MAX_CURRENT_CLAMP,
     CONF_MAX_VOLTAGE_CLAMP,
+    CONF_PROFILE,
     CONF_SCAN_INTERVAL,
     CONF_SERIAL_PORT,
     DEFAULT_BAUDRATE,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    PROFILE_AUTO,
 )
 from .scpi_psu_client import (
     PsuIdentity,
@@ -73,6 +75,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         self.serial_url: str = cfg[CONF_SERIAL_PORT]
         self.baudrate: int = int(cfg.get(CONF_BAUDRATE, DEFAULT_BAUDRATE))
         scan_interval = int(cfg.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
+        self.configured_profile: str = cfg.get(CONF_PROFILE, PROFILE_AUTO)
 
         self.max_voltage_clamp: float | None = (
             float(cfg[CONF_MAX_VOLTAGE_CLAMP])
@@ -100,6 +103,9 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             serial_url=self.serial_url,
             baudrate=self.baudrate,
             initial_idn=initial_idn,
+            profile_key=self.configured_profile
+            if self.configured_profile != PROFILE_AUTO
+            else None,
             command_delay=command_delay,
             write_delay=write_delay,
         )

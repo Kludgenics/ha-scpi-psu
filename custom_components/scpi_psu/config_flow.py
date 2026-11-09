@@ -22,15 +22,36 @@ from .const import (
     CONF_MAX_CURRENT_CLAMP,
     CONF_MAX_VOLTAGE_CLAMP,
     CONF_NAME,
+    CONF_PROFILE,
     CONF_SCAN_INTERVAL,
     CONF_SERIAL_PORT,
     DEFAULT_BAUDRATE,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    PROFILE_AUTO,
+    PROFILE_OWON,
+    PROFILE_STANDARD,
 )
 from .scpi_psu_client import PsuIdentity, ScpiPsuClient
 
 _LOGGER = logging.getLogger(__name__)
+
+PROFILE_SELECTOR = selector.SelectSelector(
+    selector.SelectSelectorConfig(
+        options=[
+            selector.SelectOptionDict(value=PROFILE_AUTO, label="Auto-detect via *IDN?"),
+            selector.SelectOptionDict(
+                value=PROFILE_STANDARD,
+                label="Standard IEEE 488.2 / SCPI (Rigol, Siglent, Keysight, etc.)",
+            ),
+            selector.SelectOptionDict(
+                value=PROFILE_OWON,
+                label="OWON & Rebrands (MEAS:ALL:INFO?, VOLT:LIM)",
+            ),
+        ],
+        mode=selector.SelectSelectorMode.DROPDOWN,
+    )
+)
 
 
 BAUDRATE_SELECTOR = selector.NumberSelector(
@@ -144,6 +165,7 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_SERIAL_PORT: self._serial_url,
                 CONF_BAUDRATE: self._baudrate,
                 CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL,
+                CONF_PROFILE: user_input.get(CONF_PROFILE, PROFILE_AUTO),
                 CONF_IDN: self._identity.raw_idn,
             }
             if v_clamp is not None:
@@ -159,6 +181,7 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_NAME,
                     description={"suggested_value": self._identity.default_title},
                 ): selector.TextSelector(),
+                probatio.Required(CONF_PROFILE, default=PROFILE_AUTO): PROFILE_SELECTOR,
                 probatio.Optional(CONF_MAX_VOLTAGE_CLAMP): VOLTAGE_CLAMP_SELECTOR,
                 probatio.Optional(CONF_MAX_CURRENT_CLAMP): CURRENT_CLAMP_SELECTOR,
             }
@@ -205,6 +228,7 @@ class ScpiPsuOptionsFlow(OptionsFlow):
                     CONF_SERIAL_PORT: serial_url,
                     CONF_BAUDRATE: baudrate,
                     CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
+                    CONF_PROFILE: user_input.get(CONF_PROFILE, PROFILE_AUTO),
                     CONF_MAX_VOLTAGE_CLAMP: _clean_optional_float(
                         user_input.get(CONF_MAX_VOLTAGE_CLAMP)
                     ),
@@ -225,6 +249,9 @@ class ScpiPsuOptionsFlow(OptionsFlow):
             probatio.Required(
                 CONF_BAUDRATE, default=int(cfg.get(CONF_BAUDRATE, DEFAULT_BAUDRATE))
             ): BAUDRATE_SELECTOR,
+            probatio.Required(
+                CONF_PROFILE, default=cfg.get(CONF_PROFILE, PROFILE_AUTO)
+            ): PROFILE_SELECTOR,
             probatio.Optional(
                 CONF_MAX_VOLTAGE_CLAMP,
                 description={"suggested_value": v_clamp_default},

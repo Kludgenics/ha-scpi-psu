@@ -20,9 +20,11 @@ from custom_components.scpi_psu.const import (
     CONF_BAUDRATE,
     CONF_MAX_CURRENT_CLAMP,
     CONF_MAX_VOLTAGE_CLAMP,
+    CONF_PROFILE,
     CONF_SCAN_INTERVAL,
     CONF_SERIAL_PORT,
     DOMAIN,
+    PROFILE_AUTO,
 )
 from custom_components.scpi_psu.scpi_psu_client.models import PsuIdentity
 
@@ -118,11 +120,13 @@ async def test_flow_user_step_and_confirm(hass: HomeAssistant) -> None:
             {
                 CONF_MAX_VOLTAGE_CLAMP: 24.0,
                 CONF_MAX_CURRENT_CLAMP: 3.0,
+                CONF_PROFILE: PROFILE_AUTO,
             }
         )
         assert result3["type"] is FlowResultType.CREATE_ENTRY
         assert result3["title"] == "OWON SPE6103"
         assert result3["data"][CONF_SERIAL_PORT] == "socket://127.0.0.1:5025"
+        assert result3["data"][CONF_PROFILE] == PROFILE_AUTO
         assert result3["data"][CONF_MAX_VOLTAGE_CLAMP] == 24.0
         assert result3["data"][CONF_MAX_CURRENT_CLAMP] == 3.0
 
@@ -162,11 +166,13 @@ async def test_options_flow(hass: HomeAssistant) -> None:
                 CONF_SERIAL_PORT: "socket://127.0.0.1:5026",
                 CONF_BAUDRATE: 115200,
                 CONF_SCAN_INTERVAL: 5,
+                CONF_PROFILE: PROFILE_AUTO,
                 CONF_MAX_VOLTAGE_CLAMP: 30.0,
                 CONF_MAX_CURRENT_CLAMP: 5.0,
             }
         )
         assert ok_res["type"] is FlowResultType.CREATE_ENTRY
         assert ok_res["data"][CONF_SERIAL_PORT] == "socket://127.0.0.1:5026"
+        assert ok_res["data"][CONF_PROFILE] == PROFILE_AUTO
         assert ok_res["data"][CONF_SCAN_INTERVAL] == 5
         assert ok_res["data"][CONF_MAX_VOLTAGE_CLAMP] == 30.0

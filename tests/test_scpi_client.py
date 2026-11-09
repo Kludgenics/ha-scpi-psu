@@ -218,6 +218,17 @@ async def test_client_connection_failure() -> None:
         assert client.is_connected is False
 
 
+async def test_client_configured_profile_override() -> None:
+    # A standard IDN, but explicitly configured to use owon profile
+    client = ScpiPsuClient(
+        "socket://127.0.0.1:5025",
+        initial_idn="CustomVendor,BenchSupply,123,1.0",
+        profile_key="owon",
+    )
+    assert client.identity.profile_key == "standard"
+    assert client.profile.key == "owon"
+
+
 async def test_client_telemetry_and_controls() -> None:
     owon_client = ScpiPsuClient("socket://127.0.0.1:5025", initial_idn="OWON,SPE6103,1234,1.0")
     with patch.object(owon_client, "_query_unlocked", new_callable=AsyncMock) as mock_owon_q:
