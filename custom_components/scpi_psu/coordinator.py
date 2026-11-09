@@ -125,21 +125,41 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             write_delay=write_delay,
         )
         self._state = ScpiPsuData(idn=initial_idn)
-        self._active_fields: set[str] = {
-            FIELD_VOLTAGE,
-            FIELD_CURRENT,
-            FIELD_POWER,
-            FIELD_OUTPUT_ENABLED,
-            FIELD_STATUS_TEXT,
-            FIELD_FAULT_ALARM,
-            FIELD_OVP_TRIPPED,
-            FIELD_OCP_TRIPPED,
-            FIELD_OPP_TRIPPED,
-        }
-        if self.identity.has_dmm:
-            self._active_fields.add(FIELD_DMM)
+        self._registered_fields: dict[str, int] = {}
         self._last_full_poll: float = 0.0
         self._consecutive_failures: int = 0
+
+    def register_field_interest(self, field: str) -> None:
+        """Register entity interest in a measurement field."""
+        self._registered_fields[field] = self._registered_fields.get(field, 0) + 1
+
+    def unregister_field_interest(self, field: str) -> None:
+        """Unregister entity interest in a measurement field."""
+        if field in self._registered_fields:
+            self._registered_fields[field] -= 1
+            if self._registered_fields[field] <= 0:
+                del self._registered_fields[field]
+
+    @property
+    def active_fields(self) -> set[str]:
+        """Compute the union of fields actively needed by enabled entities."""
+        if self._registered_fields:
+            fields = set(self._registered_fields.keys())
+        else:
+            fields = {
+                FIELD_VOLTAGE,
+                FIELD_CURRENT,
+                FIELD_POWER,
+                FIELD_OUTPUT_ENABLED,
+                FIELD_STATUS_TEXT,
+                FIELD_FAULT_ALARM,
+                FIELD_OVP_TRIPPED,
+                FIELD_OCP_TRIPPED,
+                FIELD_OPP_TRIPPED,
+            }
+        if self.identity.has_dmm:
+            fields.add(FIELD_DMM)
+        return fields
 
     @property
     def identity(self) -> PsuIdentity:
@@ -215,10 +235,8 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             ident = await self.client.probe_identity()
             if ident.raw_idn:
                 self._state.idn = ident.raw_idn
-            if self.identity.has_dmm:
-                self._active_fields.add(FIELD_DMM)
-
-        telemetry = await self.client.poll_telemetry(channel=1, needed_fields=self._active_fields)
+        needed = self.active_fields
+        telemetry = await self.client.poll_telemetry(channel=1, needed_fields=needed)
         if telemetry is None:
             self._consecutive_failures += 1
             if self._consecutive_failures >= 2:
@@ -251,9 +269,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         # Poll remaining channels if multi-channel
         if self.identity.channels > 1:
             for ch in range(2, self.identity.channels + 1):
-                ch_telemetry = await self.client.poll_telemetry(
-                    channel=ch, needed_fields=self._active_fields
-                )
+                ch_telemetry = await self.client.poll_telemetry(channel=ch, needed_fields=needed)
                 if ch_telemetry is not None:
                     ch_telemetry.channel = ch
                     self._apply_telemetry(ch_telemetry)
