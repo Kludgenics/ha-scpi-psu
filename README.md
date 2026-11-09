@@ -100,3 +100,10 @@ The integration automatically detects the device profile from the IEEE 488.2 `*I
    - For USB adapters: select `/dev/serial/by-id/...` or `/dev/ttyUSB0`
    - For MikroTik / ser2net: `socket://192.168.88.1:4001` or `rfc2217://192.168.88.1:4001`
 4. Confirm communication and adjust default voltage/current clamp limits.
+
+
+## Development
+
+The standalone client and its tests live in `packages/scpi_psu_client`. Edit the client there; the integration's `scpi_psu_client` directory is generated. Run `python3 scripts/build_integration.py` to synchronize that copy and create a self-contained HACS archive in `dist/scpi_psu.zip`. CI checks that the checked-in copy matches the package source.
+
+Run the Home Assistant tests with `.venv/bin/pytest tests`, the standalone client tests with `.venv/bin/pytest packages/scpi_psu_client/tests`, or both with `.venv/bin/pytest`. The client can also be tested independently from its own directory after installing its `test` extra.

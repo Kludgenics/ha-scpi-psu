@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from dataclasses import fields as dataclass_fields
 
@@ -26,6 +27,11 @@ class PsuIdentity:
     has_dmm: bool = False
 
     @property
+    def is_valid(self) -> bool:
+        """Whether identity discovery supplied a structured IDN response."""
+        return "," in self.raw_idn
+
+    @property
     def default_title(self) -> str:
         """Default device title based on discovered hardware."""
         if self.manufacturer and self.model:
@@ -45,8 +51,16 @@ class ChannelTelemetry:
     ovp_tripped: bool | None = None
     ocp_tripped: bool | None = None
     opp_tripped: bool | None = None
-    status_text: str = "Active"
+    status_text: str | None = "Active"
     fault_alarm: bool | None = None
+
+    def update_snapshot(
+        self, snap: TelemetrySnapshot | None, requested_fields: Collection[str] = ()
+    ) -> None:
+        """Replace requested readings, retaining unrequested values on partial polls."""
+        self.clear_fields(requested_fields)
+        if snap is not None:
+            self.apply_snapshot(snap)
 
     def apply_snapshot(self, snap: TelemetrySnapshot) -> None:
         """Update non-None fields from a TelemetrySnapshot."""
@@ -55,6 +69,12 @@ class ChannelTelemetry:
                 val = getattr(snap, f.name, None)
                 if val is not None:
                     setattr(self, f.name, val)
+
+    def clear_fields(self, field_names: Collection[str]) -> None:
+        """Mark requested channel measurements unknown after a failed poll."""
+        for f in dataclass_fields(self):
+            if f.name != "channel" and f.name in field_names:
+                setattr(self, f.name, None)
 
 
 @dataclass

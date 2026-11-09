@@ -18,6 +18,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify generated client
+        run: python scripts/sync_client.py --check
+
       - name: Check for New Commits Since Latest Tag
         id: check_commits
         run: |

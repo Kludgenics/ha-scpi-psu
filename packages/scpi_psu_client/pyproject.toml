@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "scpi-psu"
 version = "1.0.0"
 description = "Async SCPI client for programmable bench power supplies"
+requires-python = ">=3.12"
 readme = "README.md"
 authors = [{ name = "Matthias Granberry", email = "matthias@kludgenics.com" }]
 license = { text = "MIT" }
@@ -27,3 +28,16 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/Kludgenics/ha-scpi-psu"
 Issues = "https://github.com/Kludgenics/ha-scpi-psu/issues"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pyvisa>=1.14.0",
+    "pyvisa-sim>=0.6.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["enable_socket: allow local sockets when pytest-socket is installed"]

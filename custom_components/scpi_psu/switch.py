@@ -27,7 +27,7 @@ async def async_setup_entry(
     else:
         switches.append(ScpiPsuMasterOutputSwitch(coordinator))
         for ch in range(1, coordinator.identity.channels + 1):
-            switches.append(ScpiPsuOutputSwitch(coordinator, channel=ch, multi_channel=True))
+            switches.append(ScpiPsuOutputSwitch(coordinator, channel=ch))
 
     async_add_entities(switches)
 
@@ -41,12 +41,10 @@ class ScpiPsuOutputSwitch(ScpiPsuEntity, SwitchEntity):
         self,
         coordinator: ScpiPsuCoordinator,
         channel: int = 1,
-        *,
-        multi_channel: bool = False,
     ) -> None:
         super().__init__(coordinator)
         self.channel = channel
-        prefix = f"_ch{channel}" if multi_channel else ""
+        prefix = f"_ch{channel}" if coordinator.identity.channels > 1 else ""
         self._attr_unique_id = f"{coordinator.entry.entry_id}{prefix}_output"
         self._attr_device_info = coordinator.channel_device_info(channel)
         self._tracked_fields = ((FIELD_OUTPUT_ENABLED, channel),)

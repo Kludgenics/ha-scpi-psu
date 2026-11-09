@@ -26,6 +26,7 @@ class PyVisaSimTcpBridge:
         self._inst: Any = None
         self._rm: Any = None
         self._client_tasks: set[asyncio.Task] = set()
+        self._client_errors: list[BaseException] = []
 
     async def start(self) -> str:
         """Start TCP server on an ephemeral loopback port and return socket:// URL."""
@@ -45,7 +46,12 @@ class PyVisaSimTcpBridge:
     ) -> None:
         task = asyncio.create_task(self._handle_client(reader, writer))
         self._client_tasks.add(task)
-        task.add_done_callback(self._client_tasks.discard)
+        task.add_done_callback(self._client_finished)
+
+    def _client_finished(self, task: asyncio.Task) -> None:
+        self._client_tasks.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            self._client_errors.append(error)
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -80,7 +86,7 @@ class PyVisaSimTcpBridge:
                                 reply = self._inst.query(line)
                         writer.write((reply.strip() + "\n").encode("ascii"))
                         await writer.drain()
-                    except Exception:
+                    except pyvisa.errors.VisaIOError:
                         writer.write(b"ERROR\n")
                         await writer.drain()
                 else:
@@ -88,9 +94,9 @@ class PyVisaSimTcpBridge:
                     if self.custom_query_hook:
                         consumed = bool(self.custom_query_hook(line))
                     if not consumed:
-                        with contextlib.suppress(Exception):
+                        with contextlib.suppress(pyvisa.errors.VisaIOError):
                             self._inst.write(line)
-        except asyncio.CancelledError, ConnectionResetError, BrokenPipeError, OSError:
+        except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError, OSError):
             pass
         finally:
             writer.close()
@@ -110,10 +116,14 @@ class PyVisaSimTcpBridge:
             self._client_tasks.clear()
 
         if self._inst is not None:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(pyvisa.errors.VisaIOError):
                 self._inst.close()
             self._inst = None
         if self._rm is not None:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(pyvisa.errors.VisaIOError):
                 self._rm.close()
             self._rm = None
+
+        if self._client_errors:
+            errors, self._client_errors = self._client_errors, []
+            raise BaseExceptionGroup("Unexpected simulated instrument errors", errors)

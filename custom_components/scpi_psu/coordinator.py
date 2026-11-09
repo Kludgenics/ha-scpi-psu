@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection, Iterable
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -32,6 +33,7 @@ from .const import (
     dmm_identifier,
 )
 from .scpi_psu_client import (
+    FIELD_DMM,
     ChannelTelemetry,
     PsuIdentity,
     ScpiProfile,
@@ -49,7 +51,6 @@ class ScpiPsuData:
 
     connected: bool = False
     responding: bool = False
-    all_outputs_enabled: bool | None = None
     voltage_setpoint: float | None = None
     current_setpoint: float | None = None
     voltage_limit: float | None = None
@@ -58,13 +59,42 @@ class ScpiPsuData:
     system_error: str | None = None
     dmm_reading: float | None = None
     channels: dict[int, ChannelTelemetry] = field(default_factory=dict)
+    channel_count: int = 1
 
     @property
     def ch1(self) -> ChannelTelemetry:
         """Return primary Channel 1 telemetry."""
-        return self.channels.setdefault(
-            1, ChannelTelemetry(channel=1, status_text=STATUS_UNRESPONSIVE)
-        )
+        return self.channels.get(1) or ChannelTelemetry(channel=1, status_text=STATUS_UNRESPONSIVE)
+
+    @property
+    def all_outputs_enabled(self) -> bool | None:
+        """Summarize known channel output states."""
+        states = [
+            self.channels[ch].output_enabled if ch in self.channels else None
+            for ch in range(1, self.channel_count + 1)
+        ]
+        if any(state is True for state in states):
+            return True
+        return False if all(state is False for state in states) else None
+
+    def apply_telemetry(
+        self, snap: TelemetrySnapshot, requested_fields: Collection[str] = ()
+    ) -> None:
+        channel = self.channels.setdefault(snap.channel, ChannelTelemetry(channel=snap.channel))
+        channel.update_snapshot(snap, requested_fields)
+        if snap.channel == 1 and (FIELD_DMM in requested_fields or snap.dmm_reading is not None):
+            self.dmm_reading = snap.dmm_reading
+
+    def invalidate_outputs(self, channels: Iterable[int]) -> None:
+        for channel in channels:
+            data = self.channels.setdefault(channel, ChannelTelemetry(channel=channel))
+            data.output_enabled = None
+            data.status_text = None
+
+    def set_output(self, channel: int, enabled: bool) -> None:
+        self.channels.setdefault(
+            channel, ChannelTelemetry(channel=channel)
+        ).output_enabled = enabled
 
 
 class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
@@ -117,7 +147,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             command_delay=command_delay,
             write_delay=write_delay,
         )
-        self._state = ScpiPsuData(idn=initial_idn)
+        self._state = ScpiPsuData(idn=initial_idn, channel_count=self.identity.channels)
         self._registered_fields: dict[int, dict[str, int]] = {}
         self._last_full_poll: float = 0.0
         self._consecutive_failures: int = 0
@@ -202,16 +232,22 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
 
     def _mark_unresponsive(self) -> None:
         self._state.responding = False
-        for ch in range(1, max(1, self.identity.channels) + 1):
-            self._state.channels[ch] = ChannelTelemetry(channel=ch, status_text=STATUS_UNRESPONSIVE)
+        self._state.dmm_reading = None
+        self._state.system_error = None
+        self._state.channels = {
+            ch: ChannelTelemetry(channel=ch, status_text=STATUS_UNRESPONSIVE)
+            for ch in range(1, max(1, self.identity.channels) + 1)
+        }
 
     async def _async_update_data(self) -> ScpiPsuData:
-        if not self._state.idn or "," not in self._state.idn:
+        if not self.identity.is_valid:
             ident = await self.client.probe_identity()
             if ident.raw_idn:
                 self._state.idn = ident.raw_idn
+                self._state.channel_count = ident.channels
+        requested_fields = self.active_fields_by_channel
         all_telemetry = await self.client.poll_all_channels(
-            needed_fields_by_channel=self.active_fields_by_channel
+            needed_fields_by_channel=requested_fields
         )
         if all_telemetry is None:
             self._consecutive_failures += 1
@@ -234,8 +270,12 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         self._state.connected = True
         self._state.responding = True
 
-        for snap in all_telemetry.values():
-            self._apply_telemetry(snap)
+        for channel, fields in requested_fields.items():
+            snap = all_telemetry.get(channel, TelemetrySnapshot(channel=channel))
+            self._state.apply_telemetry(snap, fields)
+        for channel, snap in all_telemetry.items():
+            if channel not in requested_fields:
+                self._state.apply_telemetry(snap)
 
         now = time.monotonic()
         if now - self._last_full_poll >= FULL_POLL_INTERVAL or self._state.voltage_setpoint is None:
@@ -253,26 +293,12 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             if setpoints["current_setpoint"] is not None:
                 self._state.current_setpoint = setpoints["current_setpoint"]
 
+        self._state.connected = self.client.is_connected
         return self._state
 
-    def _apply_telemetry(self, snap: TelemetrySnapshot) -> None:
-        ch = snap.channel
-        ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
-        ch_data.apply_snapshot(snap)
-        if ch == 1 and snap.dmm_reading is not None:
-            self._state.dmm_reading = snap.dmm_reading
-
-        self._sync_all_outputs_enabled()
-
-    def _sync_all_outputs_enabled(self) -> None:
-        """Update all_outputs_enabled summary from channel states."""
-        if self._state.channels:
-            active_states = [
-                c.output_enabled
-                for c in self._state.channels.values()
-                if c.output_enabled is not None
-            ]
-            self._state.all_outputs_enabled = any(active_states) if active_states else None
+    def _publish_state(self) -> None:
+        self._state.connected = self.client.is_connected
+        self.async_set_updated_data(self._state)
 
     def _clamp_value(self, value: float, ceiling: float, label: str, unit: str) -> float:
         if value > ceiling:
@@ -290,28 +316,37 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         return max(0.0, value)
 
     async def async_set_output(self, enabled: bool, channel: int = 1) -> None:
-        actual = await self.client.set_output(enabled, channel=channel)
-        snap = await self.client.poll_telemetry(channel=channel)
-        ch_data = self._state.channels.setdefault(channel, ChannelTelemetry(channel=channel))
-        ch_data.output_enabled = actual
+        try:
+            actual = await self.client.set_output(enabled, channel=channel)
+            snap = await self.client.poll_telemetry(channel=channel)
+        except Exception, asyncio.CancelledError:
+            self._state.invalidate_outputs((channel,))
+            self._publish_state()
+            raise
+        self._state.set_output(channel, actual)
         if snap is not None:
             snap.output_enabled = actual
-            self._apply_telemetry(snap)
-        else:
-            self._sync_all_outputs_enabled()
-        self.async_set_updated_data(self._state)
+            self._state.apply_telemetry(
+                snap, self.client.default_fields_by_channel().get(snap.channel, set())
+            )
+        self._publish_state()
 
     async def async_set_all_outputs(self, enabled: bool) -> None:
-        """Atomically toggle all channel outputs on a multi-channel device."""
-        actual = await self.client.set_all_outputs(enabled)
-        snap = await self.client.poll_telemetry(channel=1)
+        """Toggle all channel outputs on a multi-channel device."""
+        try:
+            actual = await self.client.set_all_outputs(enabled)
+            snap = await self.client.poll_telemetry(channel=1)
+        except Exception, asyncio.CancelledError:
+            self._state.invalidate_outputs(range(1, self.identity.channels + 1))
+            self._publish_state()
+            raise
         if snap is not None:
-            self._apply_telemetry(snap)
+            self._state.apply_telemetry(
+                snap, self.client.default_fields_by_channel().get(snap.channel, set())
+            )
         for ch in range(1, self.identity.channels + 1):
-            ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
-            ch_data.output_enabled = actual
-        self._state.all_outputs_enabled = actual
-        self.async_set_updated_data(self._state)
+            self._state.set_output(ch, actual)
+        self._publish_state()
 
     async def _async_set_clamped_float(
         self,
@@ -323,9 +358,14 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         state_attr: str,
     ) -> None:
         clamped = self._clamp_value(value, ceiling, label, unit)
-        actual = await setter(clamped)
+        try:
+            actual = await setter(clamped)
+        except Exception, asyncio.CancelledError:
+            setattr(self._state, state_attr, None)
+            self._publish_state()
+            raise
         setattr(self._state, state_attr, round(actual, 3))
-        self.async_set_updated_data(self._state)
+        self._publish_state()
 
     async def async_set_voltage(self, value: float) -> None:
         await self._async_set_clamped_float(
@@ -368,12 +408,19 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         )
 
     async def async_reset_errors(self) -> None:
-        await self.client.clear_faults()
-        snap = await self.client.poll_telemetry()
-        if snap is not None:
-            self._apply_telemetry(snap)
-        self._state.system_error = await self.client.get_system_error()
-        self.async_set_updated_data(self._state)
+        try:
+            await self.client.clear_faults()
+            snap = await self.client.poll_telemetry()
+            if snap is not None:
+                self._state.apply_telemetry(
+                    snap, self.client.default_fields_by_channel().get(snap.channel, set())
+                )
+            self._state.system_error = await self.client.get_system_error()
+        except Exception, asyncio.CancelledError:
+            self._state.system_error = None
+            self._publish_state()
+            raise
+        self._publish_state()
 
 
 class ScpiPsuEntity(CoordinatorEntity[ScpiPsuCoordinator]):

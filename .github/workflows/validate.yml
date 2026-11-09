@@ -33,6 +33,11 @@ jobs:
         run: |
           uv pip install --system homeassistant pytest pytest-asyncio pytest-homeassistant-custom-component pyserial aiousbwatcher pytest-cov mypy bandit pyvisa pyvisa-sim -e packages/scpi_psu_client
 
+      - name: Build integration and verify vendored client
+        run: |
+          python scripts/sync_client.py --check
+          python scripts/build_integration.py
+
       - name: Run Ruff Linter
         run: uvx ruff check .
 
@@ -40,13 +45,32 @@ jobs:
         run: uvx ruff format --check .
 
       - name: Run Mypy Type Checker
-        run: mypy custom_components/scpi_psu tests
+        run: mypy custom_components/scpi_psu packages/scpi_psu_client/scpi_psu_client packages/scpi_psu_client/tests tests
 
       - name: Run Bandit Security Scanner
         run: bandit -r custom_components/scpi_psu -s B101,B110
 
       - name: Run Pytest Suite with Coverage
-        run: pytest -v --cov=custom_components/scpi_psu --cov-fail-under=95 --cov-report=term-missing
+        run: |
+          pytest -v --cov=custom_components/scpi_psu --cov=packages/scpi_psu_client/scpi_psu_client --cov-report=
+          mv .coverage .coverage.test
+          coverage combine
+          coverage report --show-missing --fail-under=95
+
+  client-tests:
+    name: Standalone client (Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Install standalone client and test dependencies
+        run: uv pip install --system -e 'packages/scpi_psu_client[test]'
+      - name: Test without Home Assistant
+        working-directory: packages/scpi_psu_client
+        run: pytest tests
 
   hassfest:
     name: Hassfest Validation

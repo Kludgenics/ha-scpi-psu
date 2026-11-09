@@ -59,19 +59,25 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up SCPI Power Supply from a config entry."""
     coordinator = ScpiPsuCoordinator(hass, entry)
-    await coordinator.async_config_entry_first_refresh()
+    try:
+        await coordinator.async_config_entry_first_refresh()
 
-    device_registry = dr.async_get(hass)
-    device_entry = device_registry.async_get_or_create(
-        config_entry_id=entry.entry_id,
-        **coordinator.device_info,
-    )
-    coordinator.parent_device_id = device_entry.id
+        device_registry = dr.async_get(hass)
+        device_entry = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            **coordinator.device_info,
+        )
+        coordinator.parent_device_id = device_entry.id
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+        hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+    except BaseException:
+        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        await coordinator.async_close()
+        raise
+
     return True
 
 

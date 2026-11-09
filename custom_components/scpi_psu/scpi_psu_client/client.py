@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from serialx import Parity, SerialException, StopBits, open_serial_connection
@@ -29,9 +32,15 @@ from .query_planner import (
     FIELD_STATUS_TEXT,
     FIELD_VOLTAGE,
     QueryPlanner,
+    compound_command,
+    split_compound_response,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _MalformedCompoundReply(Exception):
+    """A compound reply cannot be assigned to its component queries."""
 
 
 class ScpiPsuClient:
@@ -52,6 +61,9 @@ class ScpiPsuClient:
         self.configured_profile: str | None = profile_key
         self.command_delay = command_delay
         self.write_delay = write_delay
+        self._compound_queries_enabled = True
+        self._needs_resynchronization = False
+        self._pending_identity_replies = 0
         self._lock = asyncio.Lock()
         self._reader: asyncio.StreamReader | None = None
         self._writer: Any = None
@@ -68,7 +80,9 @@ class ScpiPsuClient:
 
     @property
     def planner(self) -> QueryPlanner:
-        return QueryPlanner(self.profile, self.identity.has_dmm)
+        return QueryPlanner(
+            self.profile, self.identity.has_dmm, compound_queries=self._compound_queries_enabled
+        )
 
     def default_fields_by_channel(self) -> dict[int, set[str]]:
         """Return the default telemetry fields to poll for each hardware channel."""
@@ -81,19 +95,13 @@ class ScpiPsuClient:
             FIELD_STATUS_TEXT,
         }
         if prof.reports_status_in_telemetry:
-            ch1_fields.update(
-                {
-                    FIELD_FAULT_ALARM,
-                    FIELD_OVP_TRIPPED,
-                    FIELD_OCP_TRIPPED,
-                    FIELD_OPP_TRIPPED,
-                }
-            )
-        else:
-            if prof.cmd_get_ovp_tripped:
-                ch1_fields.add(FIELD_OVP_TRIPPED)
-            if prof.cmd_get_ocp_tripped:
-                ch1_fields.add(FIELD_OCP_TRIPPED)
+            ch1_fields.add(FIELD_FAULT_ALARM)
+        if prof.supports_ovp:
+            ch1_fields.add(FIELD_OVP_TRIPPED)
+        if prof.supports_ocp:
+            ch1_fields.add(FIELD_OCP_TRIPPED)
+        if prof.supports_opp:
+            ch1_fields.add(FIELD_OPP_TRIPPED)
         if self.identity.has_dmm:
             ch1_fields.add(FIELD_DMM)
         result: dict[int, set[str]] = {1: ch1_fields}
@@ -141,10 +149,66 @@ class ScpiPsuClient:
             _LOGGER.info("Connected to SCPI PSU at %s", self.serial_url)
             if self.write_delay > 0:
                 await asyncio.sleep(self.write_delay)
+            if self._needs_resynchronization:
+                if not await self._resynchronize_unlocked():
+                    await self._close_transport_unlocked()
+                    return False
+                self._needs_resynchronization = False
+            if self.identity.channels > 1:
+                selected = await self._exchange_unlocked(
+                    self.profile.format_select_channel(1), expect_reply=False
+                )
+                if selected is None:
+                    return False
             return True
+        except asyncio.CancelledError:
+            await self._close_transport_unlocked()
+            raise
         except (OSError, SerialException, TimeoutError) as err:
             _LOGGER.debug("serialx connect to %s failed: %s", self.serial_url, err)
+            await self._close_transport_unlocked()
             return False
+
+    @staticmethod
+    def _is_structured_identity(line: str) -> bool:
+        parts = line.split(",")
+        return len(parts) == 4 and any(c.isalpha() for c in parts[0])
+
+    def _is_identity_reply(self, line: str) -> bool:
+        if self.identity.is_valid:
+            return line == self.identity.raw_idn.strip()
+        return self._is_structured_identity(line)
+
+    async def _invalidate_session_unlocked(self) -> None:
+        self._needs_resynchronization = True
+        await self._close_transport_unlocked()
+
+    async def _resynchronize_unlocked(self) -> bool:
+        """Drain through every outstanding identity reply before reusing the serial link.
+
+        SCPI replies must remain ordered and this client must be the only controller.
+        A lost identity reply leaves recovery incomplete rather than admitting an
+        older marker as the boundary for a newer exchange.
+        """
+        assert self._writer is not None
+        assert self._reader is not None
+        try:
+            async with asyncio.timeout(3.5):
+                self._pending_identity_replies += 1
+                self._writer.write(b"*IDN?\n")
+                await self._writer.drain()
+                for _ in range(32):
+                    raw = await self._reader.readline()
+                    if not raw:
+                        return False
+                    line = raw.decode("utf-8", errors="ignore").strip()
+                    if self._is_identity_reply(line):
+                        self._pending_identity_replies -= 1
+                        if self._pending_identity_replies == 0:
+                            return True
+        except (OSError, SerialException, TimeoutError):
+            return False
+        return False
 
     async def query(self, cmd: str, expect_reply: bool = True) -> str | None:
         """Send an SCPI query and return response line."""
@@ -155,11 +219,17 @@ class ScpiPsuClient:
         if not await self._ensure_connected_unlocked():
             return None
 
+        return await self._exchange_unlocked(cmd, expect_reply)
+
+    async def _exchange_unlocked(self, cmd: str, expect_reply: bool = True) -> str | None:
         payload = (cmd.strip() + "\n").encode("ascii", errors="ignore")
 
+        identity_query = expect_reply and cmd.strip().upper() == "*IDN?"
         try:
             assert self._writer is not None
             assert self._reader is not None
+            if identity_query:
+                self._pending_identity_replies += 1
             self._writer.write(payload)
             await asyncio.wait_for(self._writer.drain(), timeout=1.5)
             if not expect_reply:
@@ -168,31 +238,66 @@ class ScpiPsuClient:
                 return ""
             raw_line = await asyncio.wait_for(self._reader.readline(), timeout=1.8)
             if not raw_line:
-                await self._close_transport_unlocked()
+                await self._invalidate_session_unlocked()
                 return None
+            line = raw_line.decode("utf-8", errors="ignore").strip()
+            if identity_query:
+                if not self._is_structured_identity(line):
+                    await self._invalidate_session_unlocked()
+                    return None
+                self._pending_identity_replies -= 1
             if self.command_delay > 0:
                 await asyncio.sleep(self.command_delay)
-            return raw_line.decode("utf-8", errors="ignore").strip()
+            return line
 
         except TimeoutError:
             _LOGGER.debug("SCPI timeout waiting for reply to '%s'", cmd)
+            await self._invalidate_session_unlocked()
             return None
+        except asyncio.CancelledError:
+            await self._invalidate_session_unlocked()
+            raise
         except (OSError, SerialException) as err:
             _LOGGER.warning("serialx transport error on '%s': %s", cmd, err)
-            await self._close_transport_unlocked()
+            await self._invalidate_session_unlocked()
             return None
+
+    async def _query_compound_unlocked(self, cmd: str, count: int) -> str | None:
+        raw = await self._query_unlocked(cmd)
+        if not self.is_connected:
+            self._compound_queries_enabled = False
+            return None
+        if split_compound_response(raw, count) is None:
+            await self._disable_compound_queries_unlocked()
+            raise _MalformedCompoundReply
+        return raw
+
+    @asynccontextmanager
+    async def _restore_primary_channel_unlocked(self, restore: bool = True) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            if restore and self.is_connected and self.identity.channels > 1:
+                await self._query_unlocked(
+                    self.profile.format_select_channel(1), expect_reply=False
+                )
 
     async def probe_identity(self) -> PsuIdentity:
         async with self._lock:
             raw_idn = await self._query_unlocked("*IDN?")
-            self.identity = parse_idn(raw_idn)
+            candidate = parse_idn(raw_idn)
+            if candidate.is_valid or not self.identity.is_valid:
+                self.identity = candidate
+            if self.is_connected and self.identity.channels > 1:
+                await self._query_unlocked(
+                    self.profile.format_select_channel(1), expect_reply=False
+                )
             return self.identity
 
     async def select_channel(self, channel: int) -> bool:
         cmd = self.profile.format_select_channel(channel)
         async with self._lock:
-            await self._query_unlocked(cmd, expect_reply=False)
-            return True
+            return await self._query_unlocked(cmd, expect_reply=False) is not None
 
     async def _poll_channel_unlocked(
         self,
@@ -214,10 +319,21 @@ class ScpiPsuClient:
 
         if self.identity.channels > 1:
             await self._query_unlocked(prof.format_select_channel(channel), expect_reply=False)
+            if not self.is_connected:
+                return None
 
         results: dict[str, Any] = {}
         for desc in plan:
-            raw = await self._query_unlocked(desc.command)
+            try:
+                raw = (
+                    await self._query_compound_unlocked(desc.command, desc.component_count)
+                    if desc.component_count > 1
+                    else await self._query_unlocked(desc.command)
+                )
+            except _MalformedCompoundReply:
+                return await self._poll_channel_unlocked(channel, needed_fields)
+            if not self.is_connected:
+                return None
             if desc.parser:
                 parsed = desc.parser(raw)
                 results.update(parsed)
@@ -247,8 +363,8 @@ class ScpiPsuClient:
             val_p = None
 
         status = results.get(FIELD_STATUS_TEXT)
-        if status is None and FIELD_STATUS_TEXT in fields:
-            status = "Active" if outp is not False else "Standby / Output Off"
+        if status is None and FIELD_STATUS_TEXT in fields and outp is not None:
+            status = "Active" if outp else "Standby / Output Off"
 
         return TelemetrySnapshot(
             voltage=val_v,
@@ -269,24 +385,33 @@ class ScpiPsuClient:
         channel: int = 1,
         needed_fields: set[str] | None = None,
     ) -> TelemetrySnapshot | None:
-        async with self._lock:
+        async with self._lock, self._restore_primary_channel_unlocked(restore=channel != 1):
             return await self._poll_channel_unlocked(channel=channel, needed_fields=needed_fields)
 
     async def _get_output_unlocked(self, channel: int = 1) -> bool | None:
         if self.identity.channels > 1:
+            if (
+                channel == 1
+                and await self._query_unlocked(
+                    self.profile.format_select_channel(1), expect_reply=False
+                )
+                is None
+            ):
+                return None
             cmd = self.profile.format_get_output(channel)
             parsed = parse_output_state(await self._query_unlocked(cmd))
             if parsed is not None:
                 return parsed
+            if not self.is_connected:
+                return None
             if channel > 1:
                 await self._query_unlocked(
                     self.profile.format_select_channel(channel), expect_reply=False
                 )
-                parsed = parse_output_state(await self._query_unlocked("OUTP?"))
-                await self._query_unlocked(
-                    self.profile.format_select_channel(1), expect_reply=False
-                )
-                return parsed
+                if not self.is_connected:
+                    return None
+                async with self._restore_primary_channel_unlocked():
+                    return parse_output_state(await self._query_unlocked("OUTP?"))
         return parse_output_state(await self._query_unlocked("OUTP?"))
 
     async def poll_all_channels(
@@ -301,28 +426,28 @@ class ScpiPsuClient:
             else self.default_fields_by_channel()
         )
         results: dict[int, TelemetrySnapshot] = {}
-        async with self._lock:
+        async with self._lock, self._restore_primary_channel_unlocked():
             for ch in range(1, total_ch + 1):
                 ch_fields = field_map.get(ch)
                 if not ch_fields:
                     continue
                 snap = await self._poll_channel_unlocked(channel=ch, needed_fields=ch_fields)
                 if snap is None:
-                    if ch == 1:
+                    if ch == 1 or not self.is_connected:
                         return None
                     continue
                 results[ch] = snap
-            if total_ch > 1:
-                await self._query_unlocked(
-                    self.profile.format_select_channel(1), expect_reply=False
-                )
         return results if results else None
 
     async def _set_and_verify_float(self, set_cmd: str, get_cmd: str, fallback: float) -> float:
         async with self._lock:
-            await self._query_unlocked(set_cmd, expect_reply=False)
+            await self._write_unlocked(set_cmd)
             readback = parse_strict_float(await self._query_unlocked(get_cmd))
             return readback if readback is not None else fallback
+
+    async def _write_unlocked(self, cmd: str) -> None:
+        if await self._query_unlocked(cmd, expect_reply=False) is None:
+            raise ConnectionError(f"Failed to send SCPI command {cmd!r} to {self.serial_url}")
 
     async def get_output(self, channel: int = 1) -> bool | None:
         async with self._lock:
@@ -330,19 +455,23 @@ class ScpiPsuClient:
 
     async def set_output(self, enabled: bool, channel: int = 1) -> bool:
         async with self._lock:
+            if self.identity.channels > 1 and channel == 1:
+                await self._write_unlocked(self.profile.format_select_channel(1))
             cmd = self.profile.format_set_output(enabled, channel)
-            await self._query_unlocked(cmd, expect_reply=False)
+            await self._write_unlocked(cmd)
             parsed = await self._get_output_unlocked(channel=channel)
             return parsed if parsed is not None else enabled
 
     async def set_all_outputs(self, enabled: bool) -> bool:
-        """Atomically set all outputs on a multi-channel power supply."""
+        """Set all outputs on a multi-channel power supply."""
         async with self._lock:
+            if self.identity.channels > 1:
+                await self._write_unlocked(self.profile.format_select_channel(1))
             cmd = self.profile.format_set_all_outputs(enabled)
-            await self._query_unlocked(cmd, expect_reply=False)
+            await self._write_unlocked(cmd)
             for ch in range(1, self.identity.channels + 1):
                 ch_cmd = self.profile.format_set_output(enabled, ch)
-                await self._query_unlocked(ch_cmd, expect_reply=False)
+                await self._write_unlocked(ch_cmd)
             return enabled
 
     async def set_voltage(self, value: float) -> float:
@@ -376,7 +505,15 @@ class ScpiPsuClient:
     async def get_system_error(self) -> str | None:
         async with self._lock:
             err = await self._query_unlocked("SYST:ERR?")
-            return err if err else None
+            if err is None:
+                return None
+            if re.fullmatch(r'[+-]?\d+\s*,\s*(?:"[^"\r\n]*"|[^,\r\n]+)', err):
+                return err
+            _LOGGER.warning(
+                "Unexpected reply to SYST:ERR?; discarding unsynchronized session: %r", err
+            )
+            await self._invalidate_session_unlocked()
+            return None
 
     async def _query_bounded_float_unlocked(self, cmd: str, max_val: float) -> float | None:
         val = parse_strict_float(await self._query_unlocked(cmd))
@@ -385,24 +522,42 @@ class ScpiPsuClient:
     async def _query_float_group_unlocked(
         self, spec: list[tuple[str, str, float]]
     ) -> dict[str, float | None]:
-        if self.profile.supports_compound_queries and len(spec) > 1:
-            cmd = ";:".join(c.lstrip(":") for _, c, _ in spec)
-            raw = await self._query_unlocked(cmd)
-            if raw and ";" in raw:
-                parts = [p.strip() for p in raw.split(";")]
-                if len(parts) == len(spec):
-                    return {
-                        key: (
-                            round(v, 3)
-                            if (v := parse_strict_float(part)) is not None and 0.0 <= v <= max_val
-                            else None
-                        )
-                        for (key, _, max_val), part in zip(spec, parts, strict=True)
-                    }
+        if (
+            self._compound_queries_enabled
+            and self.profile.supports_compound_queries
+            and len(spec) > 1
+        ):
+            cmd = compound_command([c for _, c, _ in spec])
+            try:
+                raw = await self._query_compound_unlocked(cmd, len(spec))
+            except _MalformedCompoundReply:
+                if self.identity.channels > 1:
+                    return dict.fromkeys(key for key, _, _ in spec)
+            else:
+                if raw is None:
+                    return dict.fromkeys(key for key, _, _ in spec)
+                parts = split_compound_response(raw, len(spec))
+                assert parts is not None
+                return {
+                    key: (
+                        round(v, 3)
+                        if (v := parse_strict_float(part)) is not None and 0.0 <= v <= max_val
+                        else None
+                    )
+                    for (key, _, max_val), part in zip(spec, parts, strict=True)
+                }
 
-        return {
-            key: await self._query_bounded_float_unlocked(c, max_val) for key, c, max_val in spec
-        }
+        results: dict[str, float | None] = dict.fromkeys(key for key, _, _ in spec)
+        for key, command, max_val in spec:
+            results[key] = await self._query_bounded_float_unlocked(command, max_val)
+            if not self.is_connected:
+                break
+        return results
+
+    async def _disable_compound_queries_unlocked(self) -> None:
+        """Discard a possibly misframed session and use scalar queries from now on."""
+        self._compound_queries_enabled = False
+        await self._invalidate_session_unlocked()
 
     def _setpoint_spec(self) -> list[tuple[str, str, float]]:
         prof = self.profile
@@ -437,4 +592,4 @@ class ScpiPsuClient:
 
     async def clear_faults(self) -> None:
         async with self._lock:
-            await self._query_unlocked("*CLS", expect_reply=False)
+            await self._write_unlocked("*CLS")

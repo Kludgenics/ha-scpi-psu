@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +36,19 @@ COMPOSITE_FIELDS = frozenset(
 )
 
 
+def compound_command(commands: Sequence[str]) -> str:
+    """Join SCPI commands with absolute headers for a compound query."""
+    return ";:".join(command.lstrip(":") for command in commands)
+
+
+def split_compound_response(raw: str | None, count: int) -> list[str] | None:
+    """Return one response per query, or None for an incomplete response."""
+    if not raw:
+        return None
+    parts = [part.strip() for part in raw.split(";")]
+    return parts if len(parts) == count else None
+
+
 @dataclass(frozen=True)
 class QueryDescriptor:
     """Describes an SCPI query, the measurement fields it yields, and parser."""
@@ -43,14 +56,18 @@ class QueryDescriptor:
     command: str
     fields: frozenset[str]
     parser: Callable[[str | None], dict[str, Any]] | None = None
+    component_count: int = 1
 
 
 class QueryPlanner:
     """Constructs minimal, deterministic SCPI telemetry queries."""
 
-    def __init__(self, profile: ScpiProfile, has_dmm: bool = False) -> None:
+    def __init__(
+        self, profile: ScpiProfile, has_dmm: bool = False, *, compound_queries: bool = True
+    ) -> None:
         self.profile = profile
         self.has_dmm = has_dmm
+        self.compound_queries = compound_queries
 
     def plan_queries(
         self,
@@ -174,15 +191,13 @@ class QueryPlanner:
             return []
 
         # 3. If dialect supports IEEE 488.2 compound queries, bundle into 1 round-trip!
-        if prof.supports_compound_queries and len(descs) > 1:
-            compound_cmd = ";:".join(d.command.lstrip(":") for d in descs)
+        if self.compound_queries and prof.supports_compound_queries and len(descs) > 1:
+            compound_cmd = compound_command([d.command for d in descs])
             all_fields = frozenset().union(*(d.fields for d in descs))
 
             def _parse_compound(raw: str | None) -> dict[str, Any]:
-                if not raw:
-                    return {}
-                parts = [p.strip() for p in raw.split(";")]
-                if len(parts) != len(descs):
+                parts = split_compound_response(raw, len(descs))
+                if parts is None:
                     return {}
                 res: dict[str, Any] = {}
                 for desc, part in zip(descs, parts, strict=True):
@@ -195,6 +210,7 @@ class QueryPlanner:
                     command=compound_cmd,
                     fields=all_fields,
                     parser=_parse_compound,
+                    component_count=len(descs),
                 )
             ]
 

@@ -14,10 +14,8 @@ from custom_components.scpi_psu import (
     sensor,
     switch,
 )
-from custom_components.scpi_psu.binary_sensor import BINARY_SENSORS
 from custom_components.scpi_psu.const import CONF_SERIAL_PORT, DOMAIN
 from custom_components.scpi_psu.coordinator import ScpiPsuCoordinator, ScpiPsuData
-from custom_components.scpi_psu.number import NUMBERS
 from custom_components.scpi_psu.scpi_psu_client import (
     FIELD_CURRENT,
     FIELD_DMM,
@@ -156,7 +154,13 @@ async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
     await binary_sensor.async_setup_entry(
         hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
     )
-    assert len(added) == len(BINARY_SENSORS)
+    assert {e.entity_description.key for e in added} == {
+        "fault",
+        "connected",
+        "ovp_tripped",
+        "ocp_tripped",
+        "opp_tripped",
+    }
 
     for ent in added:
         ent.hass = hass
@@ -232,7 +236,7 @@ async def test_multichannel_switch_entities(hass: HomeAssistant) -> None:
         channels=3,
     )
     coordinator.data = ScpiPsuData(
-        all_outputs_enabled=False,
+        channel_count=3,
         channels={
             1: ChannelTelemetry(channel=1, output_enabled=True),
             2: ChannelTelemetry(channel=2, output_enabled=False),
@@ -262,7 +266,7 @@ async def test_multichannel_switch_entities(hass: HomeAssistant) -> None:
     ch3_sw = added[3]
 
     assert isinstance(master_sw, switch.ScpiPsuMasterOutputSwitch)
-    assert master_sw.is_on is False
+    assert master_sw.is_on is True
 
     assert isinstance(ch1_sw, switch.ScpiPsuOutputSwitch)
     assert ch1_sw.is_on is True
@@ -330,7 +334,7 @@ async def test_number_entities(hass: HomeAssistant) -> None:
     await number.async_setup_entry(
         hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
     )
-    assert len(added) == len(NUMBERS)
+    assert len(added) == 4
 
     num_map = {ent.entity_description.key: ent for ent in added}
     assert num_map["voltage_setpoint"].native_value == 5.0
@@ -357,3 +361,51 @@ async def test_number_entities(hass: HomeAssistant) -> None:
         "voltage_setpoint",
         "current_setpoint",
     }
+
+
+async def test_number_entities_discovered_after_initial_failed_read(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Test PSU",
+        data={CONF_SERIAL_PORT: "socket://127.0.0.1:5025"},
+    )
+    entry.add_to_hass(hass)
+    coordinator = ScpiPsuCoordinator(hass, entry)
+    coordinator.data = ScpiPsuData(voltage_setpoint=5.0, current_setpoint=2.0)
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+
+    added: list[number.ScpiPsuNumber] = []
+    await number.async_setup_entry(
+        hass, entry, MagicMock(side_effect=lambda entities: added.extend(entities))
+    )
+    assert {entity.entity_description.key for entity in added} == {
+        "voltage_setpoint",
+        "current_setpoint",
+    }
+
+    coordinator.data.voltage_limit = 30.0
+    coordinator.async_set_updated_data(coordinator.data)
+    assert [entity.entity_description.key for entity in added].count("overvoltage_limit") == 1
+    assert "overcurrent_limit" not in {entity.entity_description.key for entity in added}
+
+    coordinator.data.current_limit = 5.0
+    coordinator.async_set_updated_data(coordinator.data)
+    coordinator.async_set_updated_data(coordinator.data)
+    assert {entity.entity_description.key for entity in added} == {
+        "voltage_setpoint",
+        "current_setpoint",
+        "overvoltage_limit",
+        "overcurrent_limit",
+    }
+    assert len(added) == 4
+
+
+def test_master_output_requires_all_channels_to_be_known_for_off() -> None:
+    data = ScpiPsuData(
+        channel_count=2, channels={1: ChannelTelemetry(channel=1, output_enabled=False)}
+    )
+    assert data.all_outputs_enabled is None
+    data.channels[2] = ChannelTelemetry(channel=2, output_enabled=True)
+    assert data.all_outputs_enabled is True
+    data.channels[2].output_enabled = False
+    assert data.all_outputs_enabled is False

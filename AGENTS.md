@@ -17,8 +17,8 @@ The repository is structured with two clear layers:
 - **Config Flow Probing**: `config_flow.py` probes devices via `client.probe_identity()`, avoiding ad-hoc serial reader loops.
 
 ### 2. Single Source of Truth for Library Code
-- `packages/scpi_psu_client/scpi_psu_client` is a git symlink pointing directly to `custom_components/scpi_psu/scpi_psu_client`.
-- There is only **one** copy of the client code to edit and maintain. It works natively as part of the HACS custom component while simultaneously building and testing as the standalone `scpi-psu` package.
+- `packages/scpi_psu_client/scpi_psu_client` is the canonical client source.
+- The integration build (`python3 scripts/build_integration.py`) generates the checked-in HACS vendor copy and creates `dist/scpi_psu.zip`; `python3 scripts/sync_client.py --check` verifies that copy is current. Never edit the generated copy directly. The copy keeps HACS installations self-contained.
 
 ---
 
@@ -35,6 +35,6 @@ The repository is structured with two clear layers:
 ### Running Tests
 The test configuration is anchored in `pyproject.toml` with `asyncio_mode = "auto"`:
 ```bash
-.venv/bin/pytest tests
+.venv/bin/pytest tests packages/scpi_psu_client/tests
 ```
 Ensure all tests pass before making any releases or commits.

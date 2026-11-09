@@ -17,7 +17,7 @@ from homeassistant.const import (
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -98,13 +98,35 @@ async def async_setup_entry(
 ) -> None:
     """Set up SCPI PSU number entities."""
     coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
-            ScpiPsuNumber(coordinator, description)
-            for description in NUMBERS
+    pending = {description.key: description for description in NUMBERS}
+    unsubscribe: Callable[[], None] | None = None
+
+    @callback
+    def stop_discovery() -> None:
+        nonlocal unsubscribe
+        if unsubscribe is not None:
+            unsubscribe()
+            unsubscribe = None
+
+    @callback
+    def add_supported_entities() -> None:
+        supported = [
+            description
+            for description in pending.values()
             if description.is_supported_fn(coordinator)
         ]
-    )
+        if not supported:
+            return
+        for description in supported:
+            del pending[description.key]
+        async_add_entities([ScpiPsuNumber(coordinator, description) for description in supported])
+        if not pending:
+            stop_discovery()
+
+    add_supported_entities()
+    if pending:
+        unsubscribe = coordinator.async_add_listener(add_supported_entities)
+        entry.async_on_unload(stop_discovery)
 
 
 class ScpiPsuNumber(CoordinatorEntity[ScpiPsuCoordinator], NumberEntity):

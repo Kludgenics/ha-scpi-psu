@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -25,6 +26,12 @@ from custom_components.scpi_psu.const import (
     DOMAIN,
 )
 from custom_components.scpi_psu.coordinator import ScpiPsuCoordinator
+from custom_components.scpi_psu.scpi_psu_client import (
+    FIELD_DMM,
+    FIELD_OUTPUT_ENABLED,
+    FIELD_STATUS_TEXT,
+    FIELD_VOLTAGE,
+)
 from custom_components.scpi_psu.scpi_psu_client.models import TelemetrySnapshot, parse_idn
 
 
@@ -131,6 +138,7 @@ async def test_coordinator_update_and_unresponsive_recovery(
         current=1.2,
         power=15.0,
         output_enabled=True,
+        dmm_reading=3.3,
         status_text="Constant Voltage (CV)",
     )
 
@@ -163,6 +171,8 @@ async def test_coordinator_update_and_unresponsive_recovery(
         assert data.ch1.current == 1.2
         assert data.ch1.power == 15.0
         assert data.ch1.output_enabled is True
+        assert data.all_outputs_enabled is True
+        assert data.dmm_reading == 3.3
         assert data.voltage_setpoint == 12.5
 
         # Subsequent fast poll syncs setpoints without full config poll
@@ -189,16 +199,286 @@ async def test_coordinator_update_and_unresponsive_recovery(
         assert coordinator.data.responding is False
         assert coordinator.data.ch1.voltage is None
         assert coordinator.data.ch1.status_text == "Unresponsive / Power Lost"
+        assert coordinator.data.all_outputs_enabled is None
+        assert coordinator.data.dmm_reading is None
 
         await coordinator.async_refresh()
         assert coordinator.data.responding is False
         mock_close.assert_awaited_once()
 
 
+async def test_failed_secondary_channel_clears_only_requested_fields(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Three channel PSU",
+        data={
+            CONF_SERIAL_PORT: "socket://127.0.0.1:5025",
+            CONF_IDN: "Rigol,DP832,123,1.0",
+        },
+    )
+    entry.add_to_hass(hass)
+    coordinator = ScpiPsuCoordinator(hass, entry)
+
+    with (
+        patch.object(coordinator.client, "poll_all_channels", new_callable=AsyncMock) as poll,
+        patch.object(
+            coordinator.client,
+            "get_config_registers",
+            new_callable=AsyncMock,
+            return_value={
+                "voltage_limit": 30.0,
+                "current_limit": 3.0,
+                "voltage_setpoint": 12.0,
+                "current_setpoint": 1.0,
+            },
+        ),
+        patch.object(
+            coordinator.client,
+            "get_setpoints",
+            new_callable=AsyncMock,
+            return_value={"voltage_setpoint": 12.0, "current_setpoint": 1.0},
+        ),
+        patch.object(coordinator.client, "get_system_error", new_callable=AsyncMock),
+    ):
+        poll.return_value = {
+            1: TelemetrySnapshot(channel=1, output_enabled=False),
+            2: TelemetrySnapshot(channel=2, voltage=12.0, output_enabled=True),
+            3: TelemetrySnapshot(channel=3, output_enabled=True),
+        }
+        await coordinator.async_refresh()
+        coordinator.register_field_interest(FIELD_OUTPUT_ENABLED, channel=1)
+        coordinator.register_field_interest(FIELD_OUTPUT_ENABLED, channel=2)
+
+        poll.return_value = {
+            1: TelemetrySnapshot(channel=1, output_enabled=False),
+            2: TelemetrySnapshot(channel=2, voltage=13.0),
+        }
+        await coordinator.async_refresh()
+        assert coordinator.data.channels[2].output_enabled is None
+        assert coordinator.data.channels[2].voltage == 13.0
+
+        poll.return_value[2] = TelemetrySnapshot(channel=2, output_enabled=True)
+        await coordinator.async_refresh()
+        poll.return_value = {1: TelemetrySnapshot(channel=1, output_enabled=False)}
+        await coordinator.async_refresh()
+        assert coordinator.data.channels[2].output_enabled is None
+        assert coordinator.data.channels[2].voltage == 13.0
+        assert coordinator.data.channels[3].output_enabled is True
+
+        coordinator.register_field_interest(FIELD_OUTPUT_ENABLED, channel=3)
+        poll.return_value = {
+            1: TelemetrySnapshot(channel=1, output_enabled=False),
+            3: TelemetrySnapshot(channel=3, output_enabled=False),
+        }
+        await coordinator.async_refresh()
+        assert coordinator.data.all_outputs_enabled is None
+
+
+async def test_partial_primary_poll_clears_only_requested_fields(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="PSU with multimeter",
+        data={
+            CONF_SERIAL_PORT: "socket://127.0.0.1:5025",
+            CONF_IDN: "OWON,SPM6103,123,1.0",
+        },
+    )
+    entry.add_to_hass(hass)
+    coordinator = ScpiPsuCoordinator(hass, entry)
+    coordinator.register_field_interest(FIELD_STATUS_TEXT)
+    with (
+        patch.object(coordinator.client, "poll_all_channels", new_callable=AsyncMock) as poll,
+        patch.object(
+            coordinator.client,
+            "get_config_registers",
+            new_callable=AsyncMock,
+            return_value={
+                "voltage_limit": 60.0,
+                "current_limit": 10.0,
+                "voltage_setpoint": 12.0,
+                "current_setpoint": 1.0,
+            },
+        ),
+        patch.object(
+            coordinator.client,
+            "get_setpoints",
+            new_callable=AsyncMock,
+            return_value={"voltage_setpoint": 12.0, "current_setpoint": 1.0},
+        ),
+        patch.object(coordinator.client, "get_system_error", new_callable=AsyncMock),
+    ):
+        poll.return_value = {
+            1: TelemetrySnapshot(voltage=12.0, current=1.5, output_enabled=True, dmm_reading=3.3)
+        }
+        await coordinator.async_refresh()
+        assert coordinator.data.ch1.status_text is None
+        for field in (FIELD_OUTPUT_ENABLED, FIELD_VOLTAGE, FIELD_DMM):
+            coordinator.register_field_interest(field)
+
+        poll.return_value = {1: TelemetrySnapshot(voltage=11.5)}
+        await coordinator.async_refresh()
+        assert coordinator.data.ch1.output_enabled is None
+        assert coordinator.data.ch1.voltage == 11.5
+        assert coordinator.data.ch1.current == 1.5
+        assert coordinator.data.dmm_reading is None
+
+        poll.return_value = None
+        await coordinator.async_refresh()
+        assert coordinator.data.responding is True
+        assert coordinator.data.ch1.voltage == 11.5
+        assert coordinator.data.ch1.current == 1.5
+        await coordinator.async_refresh()
+        assert coordinator.data.responding is False
+        assert coordinator.data.ch1.output_enabled is None
+
+
+@pytest.mark.parametrize("failure", [ConnectionError("write failed"), asyncio.CancelledError()])
+async def test_failed_setpoint_write_marks_only_that_value_unknown(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, failure: BaseException
+) -> None:
+    mock_config_entry.add_to_hass(hass)
+    coordinator = ScpiPsuCoordinator(hass, mock_config_entry)
+    with (
+        patch.object(coordinator.client, "set_voltage", new_callable=AsyncMock, return_value=12.0),
+        patch.object(coordinator.client, "set_current", new_callable=AsyncMock, return_value=1.0),
+    ):
+        await coordinator.async_set_voltage(12.0)
+        await coordinator.async_set_current(1.0)
+
+    published: list[tuple[float | None, float | None]] = []
+    unsubscribe = coordinator.async_add_listener(
+        lambda: published.append(
+            (coordinator.data.voltage_setpoint, coordinator.data.current_setpoint)
+        )
+    )
+    with (
+        patch.object(
+            coordinator.client, "set_voltage", new_callable=AsyncMock, side_effect=failure
+        ),
+        pytest.raises(type(failure)),
+    ):
+        await coordinator.async_set_voltage(15.0)
+    unsubscribe()
+    assert published == [(None, 1.0)]
+
+
+@pytest.mark.parametrize("failure", [ConnectionError("write failed"), asyncio.CancelledError()])
+async def test_failed_output_write_marks_only_that_channel_unknown(
+    hass: HomeAssistant, failure: BaseException
+) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Three channel PSU",
+        data={
+            CONF_SERIAL_PORT: "socket://127.0.0.1:5025",
+            CONF_IDN: "Rigol,DP832,123,1.0",
+        },
+    )
+    entry.add_to_hass(hass)
+    coordinator = ScpiPsuCoordinator(hass, entry)
+    with (
+        patch.object(coordinator.client, "set_output", new_callable=AsyncMock, return_value=False),
+        patch.object(
+            coordinator.client, "poll_telemetry", new_callable=AsyncMock, return_value=None
+        ),
+    ):
+        await coordinator.async_set_output(False, channel=1)
+        await coordinator.async_set_output(False, channel=2)
+
+    published: list[tuple[bool | None, bool | None]] = []
+    unsubscribe = coordinator.async_add_listener(
+        lambda: published.append(
+            (
+                coordinator.data.channels[1].output_enabled,
+                coordinator.data.channels[2].output_enabled,
+            )
+        )
+    )
+
+    async def write(cmd: str) -> None:
+        assert cmd == "OUTP CH2,ON"
+        raise failure
+
+    with (
+        patch.object(coordinator.client, "_write_unlocked", side_effect=write),
+        pytest.raises(type(failure)),
+    ):
+        await coordinator.async_set_output(True, channel=2)
+
+    unsubscribe()
+    assert published == [(False, None)]
+    assert coordinator.data.channels[2].status_text is None
+    assert coordinator.data.all_outputs_enabled is None
+
+
+@pytest.mark.parametrize("failure", [ConnectionError("write failed"), asyncio.CancelledError()])
+async def test_partial_all_outputs_write_marks_states_unknown(
+    hass: HomeAssistant, failure: BaseException
+) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Three channel PSU",
+        data={
+            CONF_SERIAL_PORT: "socket://127.0.0.1:5025",
+            CONF_IDN: "Rigol,DP832,123,1.0",
+        },
+    )
+    entry.add_to_hass(hass)
+    coordinator = ScpiPsuCoordinator(hass, entry)
+    snapshots = {
+        ch: TelemetrySnapshot(channel=ch, voltage=12.0, output_enabled=False, status_text="Off")
+        for ch in range(1, 4)
+    }
+    with (
+        patch.object(
+            coordinator.client, "poll_all_channels", new_callable=AsyncMock, return_value=snapshots
+        ),
+        patch.object(
+            coordinator.client,
+            "get_config_registers",
+            new_callable=AsyncMock,
+            return_value={
+                "voltage_limit": 30.0,
+                "current_limit": 3.0,
+                "voltage_setpoint": 12.0,
+                "current_setpoint": 1.0,
+            },
+        ),
+        patch.object(coordinator.client, "get_system_error", new_callable=AsyncMock),
+    ):
+        await coordinator.async_refresh()
+
+    published: list[tuple[bool | None, ...]] = []
+    unsubscribe = coordinator.async_add_listener(
+        lambda: published.append(
+            tuple(coordinator.data.channels[ch].output_enabled for ch in range(1, 4))
+        )
+    )
+    commands: list[str] = []
+
+    async def write(cmd: str) -> None:
+        commands.append(cmd)
+        if cmd == "OUTP CH2,ON":
+            raise failure
+
+    with (
+        patch.object(coordinator.client, "_write_unlocked", side_effect=write),
+        pytest.raises(type(failure)),
+    ):
+        await coordinator.async_set_all_outputs(True)
+
+    unsubscribe()
+    assert commands == ["INST:NSEL 1", "OUTP:ALL ON", "OUTP ON", "OUTP CH2,ON"]
+    assert published == [(None, None, None)]
+    assert coordinator.data.all_outputs_enabled is None
+    assert all(channel.status_text is None for channel in coordinator.data.channels.values())
+    assert coordinator.data.ch1.voltage == 12.0
+
+
 async def test_coordinator_control_methods_and_clamps(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry
 ) -> None:
-    from tests.test_scpi_client import mock_serial_responder
+    from scpi_client_tests.serial_responder import mock_serial_responder
 
     mock_config_entry.add_to_hass(hass)
     coordinator = ScpiPsuCoordinator(hass, mock_config_entry, command_delay=0.0, write_delay=0.0)
@@ -218,7 +498,9 @@ async def test_coordinator_control_methods_and_clamps(
         sent_commands.append(cmd)
         return state.get(cmd, "")
 
-    with mock_serial_responder(_responder):
+    with mock_serial_responder(
+        _responder, client_module="custom_components.scpi_psu.scpi_psu_client.client"
+    ):
         await coordinator.async_set_output(True)
         assert coordinator.data.ch1.output_enabled is True
         assert coordinator.data.ch1.voltage == 24.0
@@ -250,3 +532,77 @@ async def test_coordinator_control_methods_and_clamps(
 
         await coordinator.async_close()
         assert coordinator.data.connected is False
+
+
+async def test_failed_setup_closes_client(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    coordinator = ScpiPsuCoordinator(hass, mock_config_entry)
+    with (
+        patch("custom_components.scpi_psu.ScpiPsuCoordinator", return_value=coordinator),
+        patch.object(
+            coordinator,
+            "async_config_entry_first_refresh",
+            side_effect=RuntimeError("setup failed"),
+        ),
+        patch.object(coordinator, "async_close", new_callable=AsyncMock) as close,
+    ):
+        with pytest.raises(RuntimeError, match="setup failed"):
+            await async_setup_entry(hass, mock_config_entry)
+        close.assert_awaited_once()
+        assert mock_config_entry.entry_id not in hass.data.get(DOMAIN, {})
+
+
+async def test_error_query_disconnect_updates_connection_state(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    from unittest.mock import PropertyMock
+
+    coordinator = ScpiPsuCoordinator(hass, mock_config_entry)
+    with (
+        patch.object(
+            coordinator.client,
+            "poll_all_channels",
+            return_value={1: TelemetrySnapshot(voltage=12.0)},
+        ),
+        patch.object(
+            coordinator.client,
+            "get_config_registers",
+            return_value=dict.fromkeys(
+                ("voltage_limit", "current_limit", "voltage_setpoint", "current_setpoint")
+            ),
+        ),
+        patch.object(coordinator.client, "get_system_error", return_value=None),
+        patch.object(
+            type(coordinator.client), "is_connected", new_callable=PropertyMock, return_value=False
+        ),
+    ):
+        data = await coordinator._async_update_data()
+        assert data.connected is False
+        assert data.system_error is None
+
+
+@pytest.mark.parametrize("failure", [ConnectionError("write failed"), asyncio.CancelledError()])
+@pytest.mark.parametrize("step", ["clear_faults", "poll_telemetry", "get_system_error"])
+async def test_failed_error_reset_publishes_unknown(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, failure: BaseException, step: str
+) -> None:
+    mock_config_entry.add_to_hass(hass)
+    coordinator = ScpiPsuCoordinator(hass, mock_config_entry)
+    coordinator._state.system_error = '-200,"Execution error"'
+    published: list[str | None] = []
+    unsubscribe = coordinator.async_add_listener(
+        lambda: published.append(coordinator.data.system_error)
+    )
+    with (
+        patch.object(coordinator.client, "clear_faults", new_callable=AsyncMock),
+        patch.object(
+            coordinator.client, "poll_telemetry", new_callable=AsyncMock, return_value=None
+        ),
+        patch.object(coordinator.client, "get_system_error", new_callable=AsyncMock),
+        patch.object(coordinator.client, step, new_callable=AsyncMock, side_effect=failure),
+        pytest.raises(type(failure)),
+    ):
+        await coordinator.async_reset_errors()
+    unsubscribe()
+    assert published == [None]
