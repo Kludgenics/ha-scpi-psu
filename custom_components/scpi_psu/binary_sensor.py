@@ -65,6 +65,9 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda d: d.ch1.ovp_tripped,
         measurement_field=FIELD_OVP_TRIPPED,
+        is_supported_fn=lambda coord: bool(
+            coord.profile.reports_status_in_telemetry or coord.profile.cmd_get_ovp_tripped
+        ),
     ),
     ScpiPsuBinarySensorEntityDescription(
         key="ocp_tripped",
@@ -73,6 +76,9 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda d: d.ch1.ocp_tripped,
         measurement_field=FIELD_OCP_TRIPPED,
+        is_supported_fn=lambda coord: bool(
+            coord.profile.reports_status_in_telemetry or coord.profile.cmd_get_ocp_tripped
+        ),
     ),
     ScpiPsuBinarySensorEntityDescription(
         key="opp_tripped",

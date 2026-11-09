@@ -137,14 +137,18 @@ async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
     )
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    # Standard profile: only 'connected' is registered (status trip flags unsupported)
+    # Standard profile: 'connected', 'ovp_tripped', and 'ocp_tripped' are supported
     std_added: list[binary_sensor.ScpiPsuBinarySensor] = []
     await binary_sensor.async_setup_entry(
         hass, entry, MagicMock(side_effect=lambda ents: std_added.extend(ents))
     )
-    assert len(std_added) == 1
-    assert std_added[0].entity_description.key == "connected"
-    assert std_added[0].is_on is True
+    assert len(std_added) == 3
+    std_keys = {b.entity_description.key for b in std_added}
+    assert std_keys == {"connected", "ovp_tripped", "ocp_tripped"}
+    std_map = {b.entity_description.key: b for b in std_added}
+    assert std_map["connected"].is_on is True
+    assert std_map["ovp_tripped"].is_on is False
+    assert std_map["ocp_tripped"].is_on is True
 
     # OWON profile: all 5 binary sensors registered
     from custom_components.scpi_psu.scpi_psu_client.models import parse_idn

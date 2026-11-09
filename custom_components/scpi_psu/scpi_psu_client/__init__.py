@@ -33,7 +33,6 @@ __all__ = [
     "PROFILE_OWON",
     "PROFILE_STANDARD",
     "ChannelTelemetry",
-    "LatencyTracker",
     "OwonScpiProfile",
     "PsuIdentity",
     "QueryDescriptor",
@@ -57,7 +56,6 @@ from .query_planner import (
     FIELD_POWER,
     FIELD_STATUS_TEXT,
     FIELD_VOLTAGE,
-    LatencyTracker,
     QueryDescriptor,
     QueryPlanner,
 )

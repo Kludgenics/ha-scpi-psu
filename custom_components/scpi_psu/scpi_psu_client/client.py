@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any
 
 from serialx import Parity, SerialException, StopBits, open_serial_connection
@@ -80,11 +79,16 @@ class ScpiPsuClient:
             FIELD_POWER,
             FIELD_OUTPUT_ENABLED,
             FIELD_STATUS_TEXT,
-            FIELD_FAULT_ALARM,
-            FIELD_OVP_TRIPPED,
-            FIELD_OCP_TRIPPED,
-            FIELD_OPP_TRIPPED,
         }
+        if self.profile.reports_status_in_telemetry:
+            ch1_fields.update(
+                {
+                    FIELD_FAULT_ALARM,
+                    FIELD_OVP_TRIPPED,
+                    FIELD_OCP_TRIPPED,
+                    FIELD_OPP_TRIPPED,
+                }
+            )
         if self.identity.has_dmm:
             ch1_fields.add(FIELD_DMM)
         result: dict[int, set[str]] = {1: ch1_fields}
@@ -151,7 +155,6 @@ class ScpiPsuClient:
             return None
 
         payload = (cmd.strip() + "\n").encode("ascii", errors="ignore")
-        start_t = time.monotonic()
 
         try:
             assert self._writer is not None
@@ -161,28 +164,19 @@ class ScpiPsuClient:
             if not expect_reply:
                 if self.write_delay > 0:
                     await asyncio.sleep(self.write_delay)
-                elapsed_ms = (time.monotonic() - start_t) * 1000.0
-                self.planner.latency_tracker.record_latency(cmd, elapsed_ms, success=True)
                 return ""
             raw_line = await asyncio.wait_for(self._reader.readline(), timeout=1.8)
-            elapsed_ms = (time.monotonic() - start_t) * 1000.0
             if not raw_line:
-                self.planner.latency_tracker.record_latency(cmd, elapsed_ms, success=False)
                 await self._close_transport_unlocked()
                 return None
             if self.command_delay > 0:
                 await asyncio.sleep(self.command_delay)
-            self.planner.latency_tracker.record_latency(cmd, elapsed_ms, success=True)
             return raw_line.decode("utf-8", errors="ignore").strip()
 
         except TimeoutError:
-            elapsed_ms = (time.monotonic() - start_t) * 1000.0
-            self.planner.latency_tracker.record_latency(cmd, elapsed_ms, success=False)
             _LOGGER.debug("SCPI timeout waiting for reply to '%s'", cmd)
             return None
         except (OSError, SerialException) as err:
-            elapsed_ms = (time.monotonic() - start_t) * 1000.0
-            self.planner.latency_tracker.record_latency(cmd, elapsed_ms, success=False)
             _LOGGER.warning("serialx transport error on '%s': %s", cmd, err)
             await self._close_transport_unlocked()
             return None
@@ -404,6 +398,23 @@ class ScpiPsuClient:
         self, max_v_hw: float, max_i_hw: float
     ) -> dict[str, float | None]:
         prof = self.profile
+        if prof.supports_compound_queries:
+            cmd = f"{prof.cmd_get_voltage_setpoint};:{prof.cmd_get_current_setpoint}"
+            raw = await self._query_unlocked(cmd)
+            if raw and ";" in raw:
+                parts = [p.strip() for p in raw.split(";")]
+                if len(parts) == 2:
+                    v = parse_strict_float(parts[0])
+                    i = parse_strict_float(parts[1])
+                    return {
+                        "voltage_setpoint": round(v, 3)
+                        if v is not None and 0.0 <= v <= max_v_hw
+                        else None,
+                        "current_setpoint": round(i, 3)
+                        if i is not None and 0.0 <= i <= max_i_hw
+                        else None,
+                    }
+
         return {
             "voltage_setpoint": await self._query_bounded_float_unlocked(
                 prof.cmd_get_voltage_setpoint, max_v_hw

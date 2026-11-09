@@ -1,104 +1,63 @@
-"""Tests for Weighted Set Cover Query Planner and Latency Tracker."""
+"""Tests for Deterministic Query Planner and Compound Queries."""
 
 from __future__ import annotations
 
 from custom_components.scpi_psu.scpi_psu_client.dialects import OwonScpiProfile, StandardScpiProfile
 from custom_components.scpi_psu.scpi_psu_client.query_planner import (
     FIELD_CURRENT,
+    FIELD_DMM,
     FIELD_OUTPUT_ENABLED,
     FIELD_POWER,
     FIELD_STATUS_TEXT,
     FIELD_VOLTAGE,
-    LatencyTracker,
-    QueryDescriptor,
     QueryPlanner,
-    solve_weighted_set_cover,
 )
 
 
-def test_latency_tracker_ewma() -> None:
-    tracker = LatencyTracker(alpha=0.5, default_latency_ms=20.0, timeout_penalty_ms=500.0)
-    assert tracker.get_latency("MEAS:VOLT?") == 20.0
-
-    tracker.record_latency("MEAS:VOLT?", 10.0, success=True)
-    # 1st sample sets initial
-    assert tracker.get_latency("MEAS:VOLT?") == 10.0
-
-    # 2nd sample: 0.5 * 30 + 0.5 * 10 = 20.0
-    tracker.record_latency("MEAS:VOLT?", 30.0, success=True)
-    assert tracker.get_latency("MEAS:VOLT?") == 20.0
-
-    # Failure applies penalty
-    tracker.record_latency("MEAS:VOLT?", 10.0, success=False)
-    # 0.5 * 500 + 0.5 * 20 = 260.0
-    assert tracker.get_latency("MEAS:VOLT?") == 260.0
-
-
-def test_solve_weighted_set_cover_exact() -> None:
-    tracker = LatencyTracker()
-    cand_composite = QueryDescriptor(
-        command="MEAS:ALL:INFO?",
-        fields=frozenset({FIELD_VOLTAGE, FIELD_CURRENT, FIELD_POWER}),
-        default_latency_ms=15.0,
-    )
-    cand_v = QueryDescriptor(
-        command="MEAS:VOLT?",
-        fields=frozenset({FIELD_VOLTAGE}),
-        default_latency_ms=10.0,
-    )
-    cand_i = QueryDescriptor(
-        command="MEAS:CURR?",
-        fields=frozenset({FIELD_CURRENT}),
-        default_latency_ms=10.0,
-    )
-
-    # When all 3 fields are needed:
-    # composite cost = 15.0; discrete cost = 10.0 + 10.0 = 20.0 -> composite wins
-    res = solve_weighted_set_cover(
-        {FIELD_VOLTAGE, FIELD_CURRENT, FIELD_POWER},
-        [cand_composite, cand_v, cand_i],
-        tracker,
-    )
-    assert len(res) == 1
-    assert res[0].command == "MEAS:ALL:INFO?"
-
-    # When only voltage is needed:
-    # composite cost = 15.0; cand_v cost = 10.0 -> cand_v wins
-    res_v = solve_weighted_set_cover(
-        {FIELD_VOLTAGE},
-        [cand_composite, cand_v, cand_i],
-        tracker,
-    )
-    assert len(res_v) == 1
-    assert res_v[0].command == "MEAS:VOLT?"
-
-
-def test_query_planner_owon_and_standard_profiles() -> None:
+def test_query_planner_owon_profile() -> None:
     owon_planner = QueryPlanner(OwonScpiProfile(), channels=1, has_dmm=True)
+
+    # When multiple fields are requested, OWON selects composite MEAS:ALL:INFO?
     plan = owon_planner.plan_queries({FIELD_VOLTAGE, FIELD_CURRENT, FIELD_POWER, FIELD_STATUS_TEXT})
     assert len(plan) == 1
     assert plan[0].command == "MEAS:ALL:INFO?"
 
+    assert plan[0].parser is not None
+    parsed = plan[0].parser("12.5, 1.2, 15.0, 0, 0, 0, 1")
+    assert parsed[FIELD_VOLTAGE] == 12.5
+    assert parsed[FIELD_CURRENT] == 1.2
+    assert parsed[FIELD_POWER] == 15.0
+    assert parsed[FIELD_STATUS_TEXT] == "Constant Voltage (CV)"
+
+    # When DMM is also requested, DMM is appended as an independent descriptor
+    dmm_plan = owon_planner.plan_queries({FIELD_VOLTAGE, FIELD_DMM})
+    assert len(dmm_plan) == 2
+    assert dmm_plan[0].command == "MEAS:ALL:INFO?"
+    assert dmm_plan[1].command == ":READ?"
+
+
+def test_query_planner_standard_scpi_compound_pipeline() -> None:
     std_planner = QueryPlanner(StandardScpiProfile(), channels=1, has_dmm=False)
-    plan_std = std_planner.plan_queries({FIELD_VOLTAGE, FIELD_CURRENT, FIELD_OUTPUT_ENABLED})
-    commands = {q.command for q in plan_std}
-    assert "MEAS:VOLT?" in commands
-    assert "MEAS:CURR?" in commands
-    assert "OUTP?" in commands
 
+    # When multiple fields are needed on Standard SCPI, they are bundled into 1 semicolon compound query
+    plan_std = std_planner.plan_queries(
+        {FIELD_VOLTAGE, FIELD_CURRENT, FIELD_POWER, FIELD_OUTPUT_ENABLED}
+    )
+    assert len(plan_std) == 1
+    assert plan_std[0].command == "MEAS:VOLT?;:MEAS:CURR?;:MEAS:POW?;:OUTP?"
 
-def test_query_planner_dynamically_routes_around_slow_queries() -> None:
-    owon_planner = QueryPlanner(OwonScpiProfile(), channels=1, has_dmm=False)
-    # Artificially penalize MEAS:ALL:INFO? (e.g. repeated timeouts)
-    owon_planner.latency_tracker.record_latency("MEAS:ALL:INFO?", 600.0, success=False)
-    assert owon_planner.latency_tracker.get_latency("MEAS:ALL:INFO?") == 500.0
+    # Semicolon parser cleanly unpacks the compound response
+    assert plan_std[0].parser is not None
+    parsed = plan_std[0].parser("15.500 ; 2.300 ; 35.650 ; ON")
+    assert parsed[FIELD_VOLTAGE] == 15.5
+    assert parsed[FIELD_CURRENT] == 2.3
+    assert parsed[FIELD_POWER] == 35.65
+    assert parsed[FIELD_OUTPUT_ENABLED] is True
 
-    # With composite penalized to 500ms, discrete queries (12ms + 12ms = 24ms) become faster
-    plan = owon_planner.plan_queries({FIELD_VOLTAGE, FIELD_CURRENT})
-    commands = [q.command for q in plan]
-    assert "MEAS:ALL:INFO?" not in commands
-    assert "MEAS:VOLT?" in commands
-    assert "MEAS:CURR?" in commands
+    # When only 1 scalar field is needed, it remains a single discrete query (no semicolons)
+    single_plan = std_planner.plan_queries({FIELD_VOLTAGE})
+    assert len(single_plan) == 1
+    assert single_plan[0].command == "MEAS:VOLT?"
 
 
 async def test_partial_telemetry_and_channel_field_interest() -> None:
@@ -120,6 +79,8 @@ async def test_partial_telemetry_and_channel_field_interest() -> None:
             return "1.75"
         if "OUTP?" in cmd:
             return "ON"
+        if cmd == "MEAS:VOLT?;:OUTP?":
+            return "12.000;ON"
         return ""
 
     _attach_responder(client, _responder)
@@ -130,8 +91,7 @@ async def test_partial_telemetry_and_channel_field_interest() -> None:
     assert snap_curr.current == 1.75
     assert snap_curr.voltage is None
     assert snap_curr.power is None
-    assert "MEAS:VOLT?" not in queried_commands
-    assert "OUTP?" not in queried_commands
+    assert queried_commands == ["INST:NSEL 1", "MEAS:CURR?"]
 
     # 2. Poll only status_text on Standard SCPI -> covered by OUTP? without needing voltage/current
     queried_commands.clear()
@@ -139,8 +99,7 @@ async def test_partial_telemetry_and_channel_field_interest() -> None:
     assert snap_status is not None
     assert snap_status.output_enabled is True
     assert snap_status.status_text == "Active"
-    assert "OUTP?" in queried_commands
-    assert "MEAS:VOLT?" not in queried_commands
+    assert queried_commands == ["INST:NSEL 1", "OUTP?"]
 
     # 3. Poll all channels with per-channel field map (CH1: current, CH2: output_enabled)
     queried_commands.clear()
@@ -155,3 +114,32 @@ async def test_partial_telemetry_and_channel_field_interest() -> None:
     assert all_snaps[1].current == 1.75
     assert all_snaps[2].output_enabled is True
     assert all_snaps[2].voltage is None
+
+
+def test_compound_query_error_and_corrupt_parsing() -> None:
+    """Verify compound query parsing resilience against missing, empty, or garbage tokens."""
+    std_planner = QueryPlanner(StandardScpiProfile(), channels=1)
+    plan = std_planner.plan_queries({FIELD_VOLTAGE, FIELD_CURRENT, FIELD_OUTPUT_ENABLED})
+    assert len(plan) == 1
+    parser = plan[0].parser
+    assert parser is not None
+
+    # Normal success
+    res_good = parser("12.000 ; 1.500 ; ON")
+    assert res_good[FIELD_VOLTAGE] == 12.0
+    assert res_good[FIELD_CURRENT] == 1.5
+    assert res_good[FIELD_OUTPUT_ENABLED] is True
+
+    # Truncated response (fewer tokens than queries) -> safely drops frame
+    assert parser("12.000 ; 1.500") == {}
+    # Extra tokens -> safely drops frame
+    assert parser("12.000 ; 1.500 ; ON ; EXTRA") == {}
+    # Empty string or None -> safely drops frame
+    assert parser("") == {}
+    assert parser(None) == {}
+
+    # Corrupt scalar within compound -> only valid scalar fields are extracted
+    res_bad_curr = parser("12.000 ; GARBAGE ; ON")
+    assert res_bad_curr[FIELD_VOLTAGE] == 12.0
+    assert FIELD_CURRENT not in res_bad_curr
+    assert res_bad_curr[FIELD_OUTPUT_ENABLED] is True

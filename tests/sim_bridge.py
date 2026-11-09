@@ -12,9 +12,15 @@ import pyvisa
 class PyVisaSimTcpBridge:
     """Async TCP Server bridge directing incoming SCPI commands to pyvisa-sim resource."""
 
-    def __init__(self, resource_name: str, sim_yaml_path: str | None = None) -> None:
+    def __init__(
+        self,
+        resource_name: str,
+        sim_yaml_path: str | None = None,
+        custom_query_hook: Any = None,
+    ) -> None:
         self.resource_name = resource_name
         self.sim_yaml_path = sim_yaml_path
+        self.custom_query_hook = custom_query_hook
         self._server: asyncio.Server | None = None
         self.port: int = 0
         self._inst: Any = None
@@ -61,15 +67,29 @@ class PyVisaSimTcpBridge:
 
                 if "?" in line:
                     try:
-                        reply = self._inst.query(line)
+                        reply: str | None = None
+                        if self.custom_query_hook:
+                            reply = self.custom_query_hook(line)
+                        if reply is None:
+                            # Support IEEE 488.2 compound queries separated by semicolons
+                            if ";" in line:
+                                subcmds = [c.strip().lstrip(":") for c in line.split(";")]
+                                subreplies = [self._inst.query(sc).strip() for sc in subcmds]
+                                reply = ";".join(subreplies)
+                            else:
+                                reply = self._inst.query(line)
                         writer.write((reply.strip() + "\n").encode("ascii"))
                         await writer.drain()
                     except Exception:
                         writer.write(b"ERROR\n")
                         await writer.drain()
                 else:
-                    with contextlib.suppress(Exception):
-                        self._inst.write(line)
+                    consumed = False
+                    if self.custom_query_hook:
+                        consumed = bool(self.custom_query_hook(line))
+                    if not consumed:
+                        with contextlib.suppress(Exception):
+                            self._inst.write(line)
         except asyncio.CancelledError, ConnectionResetError, BrokenPipeError, OSError:
             pass
         finally:

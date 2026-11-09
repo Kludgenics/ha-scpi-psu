@@ -28,9 +28,12 @@ class ScpiProfile(Protocol):
     cmd_get_current_setpoint: str
     cmd_get_voltage_limit: str
     cmd_get_current_limit: str
+    cmd_get_ovp_tripped: str | None
+    cmd_get_ocp_tripped: str | None
     cmd_get_dmm_reading: str
     cmd_get_composite_telemetry: str | None
     reports_status_in_telemetry: bool
+    supports_compound_queries: bool
 
     def format_set_voltage(self, value: float) -> str: ...
     def format_set_current(self, value: float) -> str: ...
@@ -82,9 +85,12 @@ class OwonScpiProfile(BaseScpiProfile):
     key = PROFILE_OWON
     cmd_get_voltage_limit = "VOLT:LIM?"
     cmd_get_current_limit = "CURR:LIM?"
+    cmd_get_ovp_tripped: str | None = None
+    cmd_get_ocp_tripped: str | None = None
     cmd_get_dmm_reading = ":READ?"
     cmd_get_composite_telemetry: str | None = "MEAS:ALL:INFO?"
     reports_status_in_telemetry = True
+    supports_compound_queries = False
 
     @staticmethod
     def format_set_voltage_limit(value: float) -> str:
@@ -162,9 +168,12 @@ class StandardScpiProfile(BaseScpiProfile):
     key = PROFILE_STANDARD
     cmd_get_voltage_limit = "VOLT:PROT?"
     cmd_get_current_limit = "CURR:PROT?"
+    cmd_get_ovp_tripped: str | None = "VOLT:PROT:TRIP?"
+    cmd_get_ocp_tripped: str | None = "CURR:PROT:TRIP?"
     cmd_get_dmm_reading = "MEAS:VOLT:DC?"
     cmd_get_composite_telemetry: str | None = None
     reports_status_in_telemetry = False
+    supports_compound_queries = True
 
     @staticmethod
     def format_set_voltage_limit(value: float) -> str:

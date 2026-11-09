@@ -424,3 +424,114 @@ async def test_ha_integration_compatibility_matrix(
             assert await async_unload_entry(hass, entry) is True
     finally:
         await bridge.stop()
+
+
+@pytest.mark.enable_socket
+async def test_simulated_fault_trip_and_clear(hass: HomeAssistant) -> None:
+    """Simulate an overvoltage/overcurrent trip and clear fault recovery cycle."""
+    fault_active = False
+
+    def _hook(cmd: str) -> str | bool | None:
+        nonlocal fault_active
+        if cmd == "OUTP OFF":
+            # Toggling output off in this simulated test triggers an overcurrent/fault condition
+            fault_active = True
+            return True
+        if cmd == "*CLS":
+            # Clearing faults recovers the unit
+            fault_active = False
+            return True
+        if "MEAS:ALL:INFO?" in cmd:
+            if fault_active:
+                # 0V, 0A, 0W, OVP=0, OCP=1, OPP=0, MODE=3 (Fault)
+                return "0.000, 0.000, 0.000, 0, 1, 0, 3"
+            return "12.000, 2.000, 24.000, 0, 0, 0, 1"
+        return None
+
+    bridge = PyVisaSimTcpBridge("ASRL1::INSTR", SIM_YAML, custom_query_hook=_hook)
+    socket_url = await bridge.start()
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="OWON SPE6103 Fault Test",
+        data={
+            CONF_SERIAL_PORT: socket_url,
+            CONF_BAUDRATE: 115200,
+        },
+        entry_id="test_sim_spe6103_fault",
+    )
+    entry.add_to_hass(hass)
+
+    from homeassistant.config_entries import ConfigEntryState
+
+    entry._async_set_state(hass, ConfigEntryState.SETUP_IN_PROGRESS, None)
+
+    try:
+        with (
+            patch(
+                "custom_components.scpi_psu.ScpiPsuCoordinator",
+                side_effect=lambda h, e: ScpiPsuCoordinator(
+                    h, e, command_delay=0.0, write_delay=0.0
+                ),
+            ),
+            patch.object(hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock),
+            patch.object(
+                hass.config_entries,
+                "async_unload_platforms",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            assert await async_setup_entry(hass, entry) is True
+            coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
+
+            bin_sensors: list[binary_sensor.ScpiPsuBinarySensor] = []
+            await binary_sensor.async_setup_entry(
+                hass, entry, MagicMock(side_effect=lambda ents: bin_sensors.extend(ents))
+            )
+            for b in bin_sensors:
+                b.hass = hass
+                await b.async_added_to_hass()
+
+            switches: list[switch.SwitchEntity] = []
+            await switch.async_setup_entry(
+                hass, entry, MagicMock(side_effect=lambda ents: switches.extend(ents))
+            )
+
+            buttons: list[button.ScpiPsuResetButton] = []
+            await button.async_setup_entry(
+                hass, entry, MagicMock(side_effect=lambda ents: buttons.extend(ents))
+            )
+
+            bin_map = {b.entity_description.key: b for b in bin_sensors}
+
+            # 1. Normal state
+            assert bin_map["connected"].is_on is True
+            assert bin_map["fault"].is_on is False
+            assert bin_map["ocp_tripped"].is_on is False
+            assert switches[0].is_on is True
+
+            # 2. Toggle output off -> triggers fault/OCP trip in sim
+            await switches[0].async_turn_off()
+            # Force coordinator data poll update
+            await coordinator._async_update_data()
+
+            assert fault_active is True
+            assert bin_map["fault"].is_on is True
+            assert bin_map["ocp_tripped"].is_on is True
+            assert coordinator.data.ch1.status_text == "Fault / Protection Trip"
+
+            # 3. Press Clear Fault button -> sends *CLS, resets trip and recovers
+            await buttons[0].async_press()
+            await coordinator._async_update_data()
+
+            assert fault_active is False
+            assert bin_map["fault"].is_on is False
+            assert bin_map["ocp_tripped"].is_on is False
+            assert coordinator.data.ch1.status_text == "Constant Voltage (CV)"
+
+            for b in bin_sensors:
+                await b.async_will_remove_from_hass()
+            assert await async_unload_entry(hass, entry) is True
+    finally:
+        await bridge.stop()

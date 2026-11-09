@@ -269,6 +269,7 @@ async def test_client_telemetry_and_controls() -> None:
 
     client = ScpiPsuClient("socket://127.0.0.1:5025", command_delay=0.0, write_delay=0.0)
     std_table = {
+        "MEAS:VOLT?;:MEAS:CURR?;:MEAS:POW?;:OUTP?": "10.0;2.5;25.0;ON",
         "OUTP?": "ON",
         "MEAS:VOLT?": "10.0",
         "MEAS:CURR?": "2.5",
