@@ -56,14 +56,15 @@ devices:
         specs:
           type: float
       output_state:
-        default: 1
+        default: "ON"
         getter:
           q: "OUTP?"
-          r: "{:d}"
+          r: "{:s}"
         setter:
           q: "OUTP {:s}"
         specs:
-          type: int
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
       telemetry:
         default: "12.000, 2.000, 24.000, 0, 0, 0, 1"
         getter:
@@ -128,16 +129,92 @@ devices:
         specs:
           type: float
       output_state:
-        default: 1
+        default: "ON"
         getter:
           q: "OUTP?"
-          r: "{:d}"
+          r: "{:s}"
         setter:
           q: "OUTP {:s}"
         specs:
-          type: int
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
       telemetry:
         default: "5.000, 1.200, 6.000, 0, 0, 0, 1"
+        getter:
+          q: "MEAS:ALL:INFO?"
+          r: "{:s}"
+        specs:
+          type: str
+
+  owon_spm6103:
+    eom:
+      ASRL INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP SOCKET:
+        q: "\n"
+        r: "\n"
+    error: ERROR
+    dialogues:
+      - q: "*IDN?"
+        r: "OWON,SPM6103,3344556,V1.0.5"
+      - q: "*CLS"
+      - q: "SYST:ERR?"
+        r: "0,No error"
+      - q: ":READ?"
+        r: "3.298"
+    properties:
+      voltage_setpoint:
+        default: 12.0
+        getter:
+          q: "VOLT?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT {:f}"
+        specs:
+          type: float
+      current_setpoint:
+        default: 2.5
+        getter:
+          q: "CURR?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR {:f}"
+        specs:
+          type: float
+      voltage_limit:
+        default: 60.0
+        getter:
+          q: "VOLT:LIM?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT:LIM {:f}"
+        specs:
+          type: float
+      current_limit:
+        default: 10.0
+        getter:
+          q: "CURR:LIM?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR:LIM {:f}"
+        specs:
+          type: float
+      output_state:
+        default: "ON"
+        getter:
+          q: "OUTP?"
+          r: "{:s}"
+        setter:
+          q: "OUTP {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      telemetry:
+        default: "12.000, 1.500, 18.000, 0, 0, 0, 1"
         getter:
           q: "MEAS:ALL:INFO?"
           r: "{:s}"
@@ -162,6 +239,9 @@ devices:
       - q: "*CLS"
       - q: "SYST:ERR?"
         r: "0,No error"
+      - q: "INST:NSEL 1"
+      - q: "INST:NSEL 2"
+      - q: "INST:NSEL 3"
     properties:
       voltage_meas:
         default: 24.0
@@ -221,14 +301,15 @@ devices:
         specs:
           type: float
       output_state:
-        default: 1
+        default: "ON"
         getter:
           q: "OUTP?"
-          r: "{:d}"
+          r: "{:s}"
         setter:
           q: "OUTP {:s}"
         specs:
-          type: int
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
 
   siglent_spd3303x:
     eom:
@@ -248,6 +329,9 @@ devices:
       - q: "*CLS"
       - q: "SYST:ERR?"
         r: "0,No error"
+      - q: "INST:NSEL 1"
+      - q: "INST:NSEL 2"
+      - q: "INST:NSEL 3"
     properties:
       voltage_meas:
         default: 18.0
@@ -307,14 +391,15 @@ devices:
         specs:
           type: float
       output_state:
-        default: 1
+        default: "ON"
         getter:
           q: "OUTP?"
-          r: "{:d}"
+          r: "{:s}"
         setter:
           q: "OUTP {:s}"
         specs:
-          type: int
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
 
   keysight_e36311a:
     eom:
@@ -334,6 +419,11 @@ devices:
       - q: "*CLS"
       - q: "SYST:ERR?"
         r: "0,No error"
+      - q: "INST:NSEL 1"
+      - q: "INST:NSEL 2"
+      - q: "INST:NSEL 3"
+      - q: "MEAS:VOLT:DC?"
+        r: "5.012"
     properties:
       voltage_meas:
         default: 15.0
@@ -393,14 +483,107 @@ devices:
         specs:
           type: float
       output_state:
-        default: 1
+        default: "ON"
         getter:
           q: "OUTP?"
-          r: "{:d}"
+          r: "{:s}"
         setter:
           q: "OUTP {:s}"
         specs:
-          type: int
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+
+  rohde_schwarz_hmp4040:
+    eom:
+      ASRL INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP SOCKET:
+        q: "\n"
+        r: "\n"
+    error: ERROR
+    dialogues:
+      - q: "*IDN?"
+        r: "ROHDE&SCHWARZ,HMP4040,123456,HW1.0/SW2.1"
+      - q: "*CLS"
+      - q: "SYST:ERR?"
+        r: "0,No error"
+      - q: "INST:NSEL 1"
+      - q: "INST:NSEL 2"
+      - q: "INST:NSEL 3"
+      - q: "INST:NSEL 4"
+    properties:
+      voltage_meas:
+        default: 32.0
+        getter:
+          q: "MEAS:VOLT?"
+          r: "{:.3f}"
+        specs:
+          type: float
+      current_meas:
+        default: 10.0
+        getter:
+          q: "MEAS:CURR?"
+          r: "{:.3f}"
+        specs:
+          type: float
+      power_meas:
+        default: 320.0
+        getter:
+          q: "MEAS:POW?"
+          r: "{:.3f}"
+        specs:
+          type: float
+      voltage_setpoint:
+        default: 32.0
+        getter:
+          q: "VOLT?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT {:f}"
+        specs:
+          type: float
+      current_setpoint:
+        default: 10.0
+        getter:
+          q: "CURR?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR {:f}"
+        specs:
+          type: float
+      voltage_limit:
+        default: 32.0
+        getter:
+          q: "VOLT:PROT?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT:PROT {:f}"
+        specs:
+          type: float
+      current_limit:
+        default: 10.0
+        getter:
+          q: "CURR:PROT?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR:PROT {:f}"
+        specs:
+          type: float
+      output_state:
+        default: "ON"
+        getter:
+          q: "OUTP?"
+          r: "{:s}"
+        setter:
+          q: "OUTP {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+
 resources:
   ASRL1::INSTR:
     device: owon_spe6103
@@ -412,3 +595,7 @@ resources:
     device: siglent_spd3303x
   ASRL5::INSTR:
     device: keysight_e36311a
+  ASRL6::INSTR:
+    device: owon_spm6103
+  ASRL7::INSTR:
+    device: rohde_schwarz_hmp4040

@@ -22,6 +22,7 @@ class ScpiProfile(Protocol):
     def format_set_voltage_limit(self, value: float) -> str: ...
     def format_set_current_limit(self, value: float) -> str: ...
     def format_set_output(self, enabled: bool) -> str: ...
+    def format_select_channel(self, channel: int) -> str: ...
 
 
 class OwonScpiProfile:
@@ -32,6 +33,7 @@ class OwonScpiProfile:
     cmd_get_current_setpoint = "CURR?"
     cmd_get_voltage_limit = "VOLT:LIM?"
     cmd_get_current_limit = "CURR:LIM?"
+    cmd_get_dmm_reading = ":READ?"
 
     @staticmethod
     def format_set_voltage(value: float) -> str:
@@ -52,6 +54,10 @@ class OwonScpiProfile:
     @staticmethod
     def format_set_output(enabled: bool) -> str:
         return "OUTP ON" if enabled else "OUTP OFF"
+
+    @staticmethod
+    def format_select_channel(channel: int) -> str:
+        return f"INST CH{channel}"
 
     @staticmethod
     def parse_meas_all_info(line: str | None) -> TelemetrySnapshot | None:
@@ -125,6 +131,7 @@ class StandardScpiProfile:
     cmd_get_current_setpoint = "CURR?"
     cmd_get_voltage_limit = "VOLT:PROT?"
     cmd_get_current_limit = "CURR:PROT?"
+    cmd_get_dmm_reading = "MEAS:VOLT:DC?"
 
     @staticmethod
     def format_set_voltage(value: float) -> str:
@@ -145,6 +152,10 @@ class StandardScpiProfile:
     @staticmethod
     def format_set_output(enabled: bool) -> str:
         return "OUTP ON" if enabled else "OUTP OFF"
+
+    @staticmethod
+    def format_select_channel(channel: int) -> str:
+        return f"INST:NSEL {channel}"
 
 
 PROFILES: dict[str, OwonScpiProfile | StandardScpiProfile] = {

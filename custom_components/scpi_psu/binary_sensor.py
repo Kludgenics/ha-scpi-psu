@@ -92,7 +92,10 @@ class ScpiPsuBinarySensor(CoordinatorEntity[ScpiPsuCoordinator], BinarySensorEnt
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
-        self._attr_device_info = coordinator.device_info
+        if description.key in ("fault", "ovp_tripped", "ocp_tripped", "opp_tripped"):
+            self._attr_device_info = coordinator.channel_device_info(1)
+        else:
+            self._attr_device_info = coordinator.device_info
 
     @property
     def is_on(self) -> bool | None:

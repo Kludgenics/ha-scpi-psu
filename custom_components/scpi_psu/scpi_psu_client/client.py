@@ -23,12 +23,16 @@ class ScpiPsuClient:
         baudrate: int = 115200,
         profile_key: str = "auto",
         initial_idn: str | None = None,
+        command_delay: float = 0.10,
+        write_delay: float = 0.15,
     ) -> None:
         """Initialize the SCPI client."""
         self.serial_url = serial_url
         self.baudrate = baudrate
         self.configured_profile = profile_key
         self.identity: PsuIdentity = parse_idn(initial_idn)
+        self.command_delay = command_delay
+        self.write_delay = write_delay
 
         self._lock = asyncio.Lock()
         self._reader: asyncio.StreamReader | None = None
@@ -95,27 +99,22 @@ class ScpiPsuClient:
             )
             self._connected = True
             _LOGGER.info("Connected to SCPI PSU at %s", self.serial_url)
-            await asyncio.sleep(0.15)
-            await self._drain_rx_unlocked()
+            if self.write_delay > 0:
+                await asyncio.sleep(self.write_delay)
+            self._drain_rx_unlocked()
             return True
         except (OSError, SerialException, TimeoutError) as err:
             _LOGGER.debug("serialx connect to %s failed: %s", self.serial_url, err)
             self._connected = False
             return False
 
-    async def _drain_rx_unlocked(self) -> None:
-        """Drain any stale unread bytes from the StreamReader before issuing a new query."""
+    def _drain_rx_unlocked(self) -> None:
+        """Drain any stale unread bytes from the StreamReader buffer non-blockingly."""
         if self._reader is None:
             return
-        try:
-            while True:
-                chunk = await asyncio.wait_for(self._reader.read(512), timeout=0.02)
-                if not chunk:
-                    break
-        except TimeoutError:
-            pass
-        except Exception:
-            pass
+        buffer: bytearray = getattr(self._reader, "_buffer", bytearray())
+        if buffer:
+            buffer.clear()
 
     async def query(self, cmd: str, expect_reply: bool = True) -> str | None:
         """Send an SCPI query and return response line."""
@@ -126,7 +125,7 @@ class ScpiPsuClient:
         if not await self._ensure_connected_unlocked():
             return None
 
-        await self._drain_rx_unlocked()
+        self._drain_rx_unlocked()
         payload = (cmd.strip() + "\n").encode("ascii", errors="ignore")
 
         try:
@@ -135,13 +134,15 @@ class ScpiPsuClient:
             self._writer.write(payload)
             await asyncio.wait_for(self._writer.drain(), timeout=1.5)
             if not expect_reply:
-                await asyncio.sleep(0.15)
+                if self.write_delay > 0:
+                    await asyncio.sleep(self.write_delay)
                 return ""
             raw_line = await asyncio.wait_for(self._reader.readline(), timeout=1.8)
             if not raw_line:
                 await self._close_transport_unlocked()
                 return None
-            await asyncio.sleep(0.10)
+            if self.command_delay > 0:
+                await asyncio.sleep(self.command_delay)
             return raw_line.decode("utf-8", errors="ignore").strip()
 
         except TimeoutError:
@@ -164,14 +165,36 @@ class ScpiPsuClient:
             self.identity = parse_idn(raw_idn)
             return self.identity
 
-    async def poll_telemetry(self) -> TelemetrySnapshot | None:
-        """Poll telemetry snapshot from the PSU."""
+    async def select_channel(self, channel: int) -> bool:
+        """Select active channel for multi-channel instruments (INST:NSEL n or INST CHn)."""
+        cmd = self.profile.format_select_channel(channel)
+        async with self._lock:
+            await self._query_unlocked(cmd, expect_reply=False)
+            return True
+
+    async def get_dmm_reading(self) -> float | None:
+        """Query DMM scalar reading (:READ? on OWON SPM, MEAS:VOLT:DC? on Standard SCPI)."""
+        cmd = getattr(self.profile, "cmd_get_dmm_reading", ":READ?")
+        async with self._lock:
+            raw = await self._query_unlocked(cmd)
+            return parse_strict_float(raw)
+
+    async def poll_telemetry(self, channel: int = 1) -> TelemetrySnapshot | None:
+        """Poll telemetry snapshot from the PSU, optionally for a specific channel."""
         async with self._lock:
             prof = self.profile
+            if self.identity.channels > 1:
+                cmd_sel = prof.format_select_channel(channel)
+                await self._query_unlocked(cmd_sel, expect_reply=False)
+
             if prof.key == "owon" and isinstance(prof, OwonScpiProfile):
                 meas_line = await self._query_unlocked("MEAS:ALL:INFO?")
                 snap = prof.parse_meas_all_info(meas_line)
                 if snap is not None:
+                    snap.channel = channel
+                    if self.identity.has_dmm:
+                        dmm_raw = await self._query_unlocked(prof.cmd_get_dmm_reading)
+                        snap.dmm_reading = parse_strict_float(dmm_raw)
                     return snap
 
             # Standard IEEE 488.2 fallback
@@ -185,10 +208,17 @@ class ScpiPsuClient:
             if p is None or not (0.0 <= p <= 10000.0):
                 p = round(v * i, 3)
 
+            dmm_val: float | None = None
+            if self.identity.has_dmm:
+                cmd_dmm = getattr(prof, "cmd_get_dmm_reading", "MEAS:VOLT:DC?")
+                dmm_val = parse_strict_float(await self._query_unlocked(cmd_dmm))
+
             return TelemetrySnapshot(
                 voltage=round(v, 3),
                 current=round(i, 3),
                 power=round(p, 3),
+                dmm_reading=dmm_val,
+                channel=channel,
             )
 
     async def get_output(self) -> bool | None:

@@ -9,7 +9,7 @@ from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import ChildDeviceInfo, DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
@@ -60,12 +60,20 @@ class ScpiPsuData:
     current_limit: float | None = None
     idn: str | None = None
     system_error: str | None = None
+    dmm_reading: float | None = None
+    active_channel: int = 1
 
 
 class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
     """Manages serialized SCPI communication via Home Assistant's serialx library."""
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        command_delay: float = 0.10,
+        write_delay: float = 0.15,
+    ) -> None:
         """Initialize the coordinator."""
         self.entry = entry
         cfg = {**entry.data, **entry.options}
@@ -87,6 +95,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
 
         initial_idn = cfg.get(CONF_IDN)
         self.identity: PsuIdentity = parse_idn(initial_idn)
+        self.parent_device_id: str | None = None
 
         super().__init__(
             hass,
@@ -101,6 +110,8 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             baudrate=self.baudrate,
             profile_key=self.configured_profile,
             initial_idn=initial_idn,
+            command_delay=command_delay,
+            write_delay=write_delay,
         )
         self._state = ScpiPsuData(idn=initial_idn)
         self._last_full_poll: float = 0.0
@@ -139,6 +150,27 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             model=self.identity.model,
             serial_number=self.identity.serial_number,
             sw_version=self.identity.firmware,
+        )
+
+    def channel_device_info(self, channel: int = 1) -> DeviceInfo | ChildDeviceInfo:
+        """Return DeviceInfo for a specific channel or main unit."""
+        if self.identity.channels <= 1 or self.parent_device_id is None:
+            return self.device_info
+        return ChildDeviceInfo(
+            identifiers={(DOMAIN, f"{self.entry.entry_id}_ch{channel}")},
+            name=f"{self.entry.title or self.identity.default_title} Channel {channel}",
+            parent_device_id=self.parent_device_id,
+        )
+
+    @property
+    def dmm_device_info(self) -> DeviceInfo | ChildDeviceInfo:
+        """Return DeviceInfo for multimeter subsystem as a child device."""
+        if self.parent_device_id is None:
+            return self.device_info
+        return ChildDeviceInfo(
+            identifiers={(DOMAIN, f"{self.entry.entry_id}_dmm")},
+            name=f"{self.entry.title or self.identity.default_title} Multimeter",
+            parent_device_id=self.parent_device_id,
         )
 
     async def async_close(self) -> None:
@@ -200,6 +232,8 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         self._state.status_code = telemetry.status_code
         self._state.status_text = telemetry.status_text
         self._state.fault_alarm = telemetry.fault_alarm
+        self._state.dmm_reading = telemetry.dmm_reading
+        self._state.active_channel = telemetry.channel
         if telemetry.output_enabled is not None:
             self._state.output_enabled = telemetry.output_enabled
 

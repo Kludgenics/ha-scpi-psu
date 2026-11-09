@@ -15,6 +15,8 @@ test = [
     "pytest-homeassistant-custom-component>=0.13.375",
     "pyserial>=3.5",
     "aiousbwatcher>=1.1.2",
+    "pyvisa>=1.14.0",
+    "pyvisa-sim>=0.6.0",
 ]
 
 [tool.ruff]

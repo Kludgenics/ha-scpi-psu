@@ -36,7 +36,7 @@ class ScpiPsuOutputSwitch(CoordinatorEntity[ScpiPsuCoordinator], SwitchEntity):
         """Initialize the switch."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_output"
-        self._attr_device_info = coordinator.device_info
+        self._attr_device_info = coordinator.channel_device_info(1)
 
     @property
     def is_on(self) -> bool | None:

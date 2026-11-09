@@ -77,6 +77,16 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         icon="mdi:alert-octagon-outline",
         value_fn=lambda d: d.system_error,
     ),
+    ScpiPsuSensorEntityDescription(
+        key="dmm",
+        name="Multimeter Reading",
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=3,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        icon="mdi:multimeter",
+        value_fn=lambda d: d.dmm_reading,
+    ),
 )
 
 
@@ -87,7 +97,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up SCPI PSU sensors."""
     coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(ScpiPsuSensor(coordinator, description) for description in SENSORS)
+    entities: list[ScpiPsuSensor] = []
+    for description in SENSORS:
+        if description.key == "dmm" and not coordinator.identity.has_dmm:
+            continue
+        entities.append(ScpiPsuSensor(coordinator, description))
+    async_add_entities(entities)
 
 
 class ScpiPsuSensor(CoordinatorEntity[ScpiPsuCoordinator], SensorEntity):
@@ -105,7 +120,12 @@ class ScpiPsuSensor(CoordinatorEntity[ScpiPsuCoordinator], SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
-        self._attr_device_info = coordinator.device_info
+        if description.key == "dmm":
+            self._attr_device_info = coordinator.dmm_device_info
+        elif description.key in ("voltage", "current", "power", "status"):
+            self._attr_device_info = coordinator.channel_device_info(1)
+        else:
+            self._attr_device_info = coordinator.device_info
 
     @property
     def available(self) -> bool:

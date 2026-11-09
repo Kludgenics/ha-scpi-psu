@@ -113,7 +113,7 @@ class ScpiPsuNumber(CoordinatorEntity[ScpiPsuCoordinator], NumberEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
-        self._attr_device_info = coordinator.device_info
+        self._attr_device_info = coordinator.channel_device_info(1)
         self._attr_native_max_value = description.max_fn(coordinator)
 
     @property

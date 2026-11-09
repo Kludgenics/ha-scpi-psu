@@ -12,6 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN
@@ -59,6 +60,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up SCPI Power Supply from a config entry."""
     coordinator = ScpiPsuCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
+
+    device_registry = dr.async_get(hass)
+    device_entry = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        name=entry.title or coordinator.identity.default_title,
+        manufacturer=coordinator.identity.manufacturer,
+        model=coordinator.identity.model,
+        serial_number=coordinator.identity.serial_number,
+        sw_version=coordinator.identity.firmware,
+    )
+    coordinator.parent_device_id = device_entry.id
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 

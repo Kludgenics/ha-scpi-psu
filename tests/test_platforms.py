@@ -18,7 +18,6 @@ from custom_components.scpi_psu.binary_sensor import BINARY_SENSORS
 from custom_components.scpi_psu.const import CONF_SERIAL_PORT, DOMAIN
 from custom_components.scpi_psu.coordinator import ScpiPsuCoordinator, ScpiPsuData
 from custom_components.scpi_psu.number import NUMBERS
-from custom_components.scpi_psu.sensor import SENSORS
 
 
 async def test_sensor_entities(hass: HomeAssistant) -> None:
@@ -43,7 +42,8 @@ async def test_sensor_entities(hass: HomeAssistant) -> None:
     await sensor.async_setup_entry(
         hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
     )
-    assert len(added) == len(SENSORS)
+    # Default device has no DMM, so all sensors except dmm are registered
+    assert len(added) == 5
 
     sensor_map = {ent.entity_description.key: ent for ent in added}
     assert sensor_map["voltage"].available is True
@@ -52,6 +52,29 @@ async def test_sensor_entities(hass: HomeAssistant) -> None:
     assert sensor_map["power"].native_value == 18.51
     assert sensor_map["status"].native_value == "Active"
     assert sensor_map["error_register"].native_value == "0,No error"
+
+    # Test when device has DMM capability (e.g. SPM6103)
+    from custom_components.scpi_psu.scpi_psu_client.models import PsuIdentity
+
+    coordinator.identity = PsuIdentity(
+        manufacturer="OWON",
+        model="SPM6103",
+        serial_number="123",
+        firmware="1.0",
+        raw_idn="OWON,SPM6103,123,1.0",
+        profile_key="owon",
+        hw_max_voltage=60.0,
+        hw_max_current=10.0,
+        has_dmm=True,
+    )
+    coordinator.data.dmm_reading = 3.3
+    dmm_added: list[sensor.ScpiPsuSensor] = []
+    await sensor.async_setup_entry(
+        hass, entry, MagicMock(side_effect=lambda ents: dmm_added.extend(ents))
+    )
+    assert len(dmm_added) == 6
+    dmm_map = {ent.entity_description.key: ent for ent in dmm_added}
+    assert dmm_map["dmm"].native_value == 3.3
 
 
 async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
