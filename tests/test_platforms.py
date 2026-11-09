@@ -1,17 +1,24 @@
 """Tests for SCPI PSU platforms (sensor, binary_sensor, switch, number, button)."""
 
-from unittest.mock import AsyncMock, patch
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.scpi_psu.binary_sensor import BINARY_SENSORS, ScpiPsuBinarySensor
-from custom_components.scpi_psu.button import ScpiPsuResetButton
+from custom_components.scpi_psu import (
+    binary_sensor,
+    button,
+    number,
+    sensor,
+    switch,
+)
+from custom_components.scpi_psu.binary_sensor import BINARY_SENSORS
 from custom_components.scpi_psu.const import CONF_SERIAL_PORT, DOMAIN
 from custom_components.scpi_psu.coordinator import ScpiPsuCoordinator, ScpiPsuData
-from custom_components.scpi_psu.number import NUMBERS, ScpiPsuNumber
-from custom_components.scpi_psu.sensor import SENSORS, ScpiPsuSensor
-from custom_components.scpi_psu.switch import ScpiPsuOutputSwitch
+from custom_components.scpi_psu.number import NUMBERS
+from custom_components.scpi_psu.sensor import SENSORS
 
 
 async def test_sensor_entities(hass: HomeAssistant) -> None:
@@ -30,8 +37,16 @@ async def test_sensor_entities(hass: HomeAssistant) -> None:
         status_text="Active",
         system_error="0,No error",
     )
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    sensor_map = {desc.key: ScpiPsuSensor(coordinator, desc) for desc in SENSORS}
+    added: list[sensor.ScpiPsuSensor] = []
+    await sensor.async_setup_entry(
+        hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
+    )
+    assert len(added) == len(SENSORS)
+
+    sensor_map = {ent.entity_description.key: ent for ent in added}
+    assert sensor_map["voltage"].available is True
     assert sensor_map["voltage"].native_value == 12.34
     assert sensor_map["current"].native_value == 1.5
     assert sensor_map["power"].native_value == 18.51
@@ -56,8 +71,15 @@ async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
         ocp_tripped=True,
         opp_tripped=False,
     )
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    bin_map = {desc.key: ScpiPsuBinarySensor(coordinator, desc) for desc in BINARY_SENSORS}
+    added: list[binary_sensor.ScpiPsuBinarySensor] = []
+    await binary_sensor.async_setup_entry(
+        hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
+    )
+    assert len(added) == len(BINARY_SENSORS)
+
+    bin_map = {ent.entity_description.key: ent for ent in added}
     assert bin_map["connected"].is_on is True
     assert bin_map["fault"].is_on is False
     assert bin_map["ocp_tripped"].is_on is True
@@ -73,15 +95,22 @@ async def test_switch_entity(hass: HomeAssistant) -> None:
     entry.add_to_hass(hass)
     coordinator = ScpiPsuCoordinator(hass, entry)
     coordinator.data = ScpiPsuData(output_enabled=True)
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    switch = ScpiPsuOutputSwitch(coordinator)
-    assert switch.is_on is True
+    added: list[switch.ScpiPsuOutputSwitch] = []
+    await switch.async_setup_entry(
+        hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
+    )
+    assert len(added) == 1
+
+    sw = added[0]
+    assert sw.is_on is True
 
     with patch.object(coordinator, "async_set_output", new_callable=AsyncMock) as mock_set:
-        await switch.async_turn_off()
+        await sw.async_turn_off()
         mock_set.assert_awaited_once_with(False)
 
-        await switch.async_turn_on()
+        await sw.async_turn_on()
         mock_set.assert_awaited_with(True)
 
 
@@ -94,10 +123,17 @@ async def test_button_entity(hass: HomeAssistant) -> None:
     )
     entry.add_to_hass(hass)
     coordinator = ScpiPsuCoordinator(hass, entry)
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    button = ScpiPsuResetButton(coordinator)
+    added: list[button.ScpiPsuResetButton] = []
+    await button.async_setup_entry(
+        hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
+    )
+    assert len(added) == 1
+
+    btn = added[0]
     with patch.object(coordinator, "async_reset_errors", new_callable=AsyncMock) as mock_reset:
-        await button.async_press()
+        await btn.async_press()
         mock_reset.assert_awaited_once()
 
 
@@ -116,10 +152,18 @@ async def test_number_entities(hass: HomeAssistant) -> None:
         voltage_limit=30.0,
         current_limit=5.0,
     )
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    num_map = {desc.key: ScpiPsuNumber(coordinator, desc) for desc in NUMBERS}
+    added: list[number.ScpiPsuNumber] = []
+    await number.async_setup_entry(
+        hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
+    )
+    assert len(added) == len(NUMBERS)
+
+    num_map = {ent.entity_description.key: ent for ent in added}
     assert num_map["voltage_setpoint"].native_value == 5.0
     assert num_map["current_setpoint"].native_value == 2.0
+    assert num_map["voltage_setpoint"].native_max_value == 60.0
 
     with patch.object(coordinator, "async_set_voltage", new_callable=AsyncMock) as mock_v:
         await num_map["voltage_setpoint"].async_set_native_value(12.0)

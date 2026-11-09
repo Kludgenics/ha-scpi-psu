@@ -46,7 +46,7 @@ jobs:
         run: bandit -r custom_components/scpi_psu -s B101,B110
 
       - name: Run Pytest Suite with Coverage
-        run: pytest -v --cov=custom_components/scpi_psu --cov-fail-under=65 --cov-report=term-missing
+        run: pytest -v --cov=custom_components/scpi_psu --cov-fail-under=95 --cov-report=term-missing
 
   hassfest:
     name: Hassfest Validation

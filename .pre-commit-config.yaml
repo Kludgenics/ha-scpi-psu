@@ -35,7 +35,7 @@ repos:
 
       - id: pytest
         name: pytest unit tests & coverage
-        entry: .venv/bin/pytest tests --cov=custom_components/scpi_psu --cov-fail-under=65
+        entry: .venv/bin/pytest tests --cov=custom_components/scpi_psu --cov-fail-under=95
         language: system
         types: [python]
         pass_filenames: false
