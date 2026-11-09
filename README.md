@@ -35,16 +35,16 @@ The integration automatically detects the device profile from the IEEE 488.2 `*I
 
 | Manufacturer / Series | Example Models | Dialect Profile | Channels | Composite Telemetry (`MEAS:ALL:INFO?`) | Output Toggle (`OUTP`) | V / I Setpoints (`VOLT` / `CURR`) | OVP / OCP Protection Limits | Hardware Trip Flags (OVP/OCP/OPP) | Multimeter / DMM (`:READ?`) | Sub-Device Hierarchy |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Abestop** | AT6301, AT6302 | `owon` | 1 | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: (`VOLT:LIM`) | :white_check_mark: | :heavy_minus_sign: | Chassis (flat) |
-| **OWON SPE / P4000** | SPE6103, SPE3103, P4603 | `owon` | 1 | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: (`VOLT:LIM`) | :white_check_mark: | :heavy_minus_sign: | Chassis (flat) |
-| **OWON SPM (with DMM)** | SPM6103, SPM3103 | `owon` | 1 | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: (`VOLT:LIM`) | :white_check_mark: | :white_check_mark: | Chassis + DMM Sub-Device |
-| **OWON ODP** | ODP6062, ODP3033 | `owon` | 2–3 | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: (`VOLT:LIM`) | :white_check_mark: | :heavy_minus_sign: | Chassis + Channels 1..N |
-| **Kiprim / Multicomp** | DC310, DC605, MP7200xx | `owon` | 1 | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: (`VOLT:LIM`) | :white_check_mark: | :heavy_minus_sign: | Chassis (flat) |
-| **Rigol** | DP832, DP832A, DP711 | `standard` | 1–3 | :heavy_minus_sign: (discrete) | :white_check_mark: | :white_check_mark: | :white_check_mark: (`VOLT:PROT`) | :heavy_minus_sign: | :heavy_minus_sign: | Chassis + Channels 1..N |
-| **Siglent** | SPD3303X, SPD1168X | `standard` | 1–3 | :heavy_minus_sign: (discrete) | :white_check_mark: | :white_check_mark: | :white_check_mark: (`VOLT:PROT`) | :heavy_minus_sign: | :heavy_minus_sign: | Chassis + Channels 1..N |
-| **Keysight** | E36311A, E36103B | `standard` | 1–3 | :heavy_minus_sign: (discrete) | :white_check_mark: | :white_check_mark: | :white_check_mark: (`VOLT:PROT`) | :heavy_minus_sign: | :white_check_mark: (`MEAS:VOLT:DC?`) | Chassis + Channels 1..N |
-| **Rohde & Schwarz** | HMP4040, HMP2020 | `standard` | 2–4 | :heavy_minus_sign: (discrete) | :white_check_mark: | :white_check_mark: | :white_check_mark: (`VOLT:PROT`) | :heavy_minus_sign: | :heavy_minus_sign: | Chassis + Channels 1..N |
-| **Generic SCPI** | Any IEEE 488.2 supply | `standard` | 1+ | :heavy_minus_sign: (discrete) | :white_check_mark: | :white_check_mark: | :white_check_mark: (if supported) | :heavy_minus_sign: | :heavy_minus_sign: | Conditional |
+| **Abestop** | AT6301, AT6302 | `owon` | 1 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | — | Chassis (flat) |
+| **OWON SPE / P4000** | SPE6103, SPE3103, P4603 | `owon` | 1 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | — | Chassis (flat) |
+| **OWON SPM (with DMM)** | SPM6103, SPM3103 | `owon` | 1 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | ✅ | Chassis + DMM Sub-Device |
+| **OWON ODP** | ODP6062, ODP3033 | `owon` | 2–3 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | — | Chassis + Channels 1..N |
+| **Kiprim / Multicomp** | DC310, DC605, MP7200xx | `owon` | 1 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | — | Chassis (flat) |
+| **Rigol** | DP832, DP832A, DP711 | `standard` | 1–3 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | — | Chassis + Channels 1..N |
+| **Siglent** | SPD3303X, SPD1168X | `standard` | 1–3 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | — | Chassis + Channels 1..N |
+| **Keysight** | E36311A, E36103B | `standard` | 1–3 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | ✅ (`MEAS:VOLT:DC?`) | Chassis + Channels 1..N |
+| **Rohde & Schwarz** | HMP4040, HMP2020 | `standard` | 2–4 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | — | Chassis + Channels 1..N |
+| **Generic SCPI** | Any IEEE 488.2 supply | `standard` | 1+ | — (discrete) | ✅ | ✅ | ✅ (if supported) | — | — | Conditional |
 
 > [!NOTE]
 > **Sub-Device Hierarchy**: Single-channel supplies without an integrated multimeter remain flat on the parent device to preserve existing entity IDs and dashboard configurations. Multi-channel supplies and DMM units use Home Assistant's `ChildDeviceInfo` to cleanly organize channels (`Channel 1..N`) and multimeter telemetry under the chassis device.
