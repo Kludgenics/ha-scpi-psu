@@ -1,5 +1,7 @@
 """Constants for the SCPI Programmable Power Supply integration."""
 
+from .scpi_psu_client import DEFAULT_BAUDRATE, PROFILE_OWON, PROFILE_STANDARD
+
 DOMAIN = "scpi_psu"
 
 CONF_NAME = "name"
@@ -11,12 +13,28 @@ CONF_MAX_CURRENT_CLAMP = "max_current_clamp"
 CONF_PROFILE = "profile"
 CONF_IDN = "idn"
 
-DEFAULT_BAUDRATE = 115200
 DEFAULT_SCAN_INTERVAL = 2
 
 PROFILE_AUTO = "auto"
-PROFILE_OWON = "owon"
-PROFILE_STANDARD = "standard"
+
+__all__ = [
+    "CONF_BAUDRATE",
+    "CONF_IDN",
+    "CONF_MAX_CURRENT_CLAMP",
+    "CONF_MAX_VOLTAGE_CLAMP",
+    "CONF_NAME",
+    "CONF_PROFILE",
+    "CONF_SCAN_INTERVAL",
+    "CONF_SERIAL_PORT",
+    "DEFAULT_BAUDRATE",
+    "DEFAULT_SCAN_INTERVAL",
+    "DOMAIN",
+    "PROFILE_AUTO",
+    "PROFILE_OWON",
+    "PROFILE_STANDARD",
+    "channel_identifier",
+    "dmm_identifier",
+]
 
 
 def channel_identifier(entry_id: str, channel: int) -> str:

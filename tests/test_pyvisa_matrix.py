@@ -23,6 +23,8 @@ from custom_components.scpi_psu.const import (
     CONF_BAUDRATE,
     CONF_SERIAL_PORT,
     DOMAIN,
+    channel_identifier,
+    dmm_identifier,
 )
 from custom_components.scpi_psu.coordinator import ScpiPsuCoordinator
 from custom_components.scpi_psu.scpi_psu_client import ScpiPsuClient
@@ -284,10 +286,10 @@ async def test_ha_integration_compatibility_matrix(
             assert coordinator.identity.model == expected_model
             assert coordinator.identity.channels == expected_channels
             assert coordinator.identity.has_dmm == expected_has_dmm
-            assert coordinator.data.voltage == expected_telemetry["voltage"]
-            assert coordinator.data.current == expected_telemetry["current"]
-            assert coordinator.data.power == expected_telemetry["power"]
-            assert coordinator.data.status_text == expected_telemetry["status"]
+            assert coordinator.data.ch1.voltage == expected_telemetry["voltage"]
+            assert coordinator.data.ch1.current == expected_telemetry["current"]
+            assert coordinator.data.ch1.power == expected_telemetry["power"]
+            assert coordinator.data.ch1.status_text == expected_telemetry["status"]
             if expected_has_dmm:
                 assert coordinator.data.dmm_reading == expected_telemetry["dmm"]
 
@@ -360,7 +362,7 @@ async def test_ha_integration_compatibility_matrix(
                     assert sw_info is not None
                     assert isinstance(sw_info, dict)
                     assert sw_info.get("parent_device_id") == parent_id
-                    assert (DOMAIN, f"{entry.entry_id}_ch{ch_idx}") in sw_info.get(
+                    assert (DOMAIN, channel_identifier(entry.entry_id, ch_idx)) in sw_info.get(
                         "identifiers", set()
                     )
 
@@ -388,7 +390,9 @@ async def test_ha_integration_compatibility_matrix(
                 assert dmm_info is not None
                 assert isinstance(dmm_info, dict)
                 assert dmm_info.get("parent_device_id") == parent_id
-                assert (DOMAIN, f"{entry.entry_id}_dmm") in dmm_info.get("identifiers", set())
+                assert (DOMAIN, dmm_identifier(entry.entry_id)) in dmm_info.get(
+                    "identifiers", set()
+                )
 
             # Exercise coordinator actions (turn off output, change voltage setpoint)
             if expected_channels > 1:

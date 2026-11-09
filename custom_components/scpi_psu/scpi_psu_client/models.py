@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+DEFAULT_BAUDRATE = 115200
+PROFILE_OWON = "owon"
+PROFILE_STANDARD = "standard"
+
 
 @dataclass(frozen=True)
 class PsuIdentity:
@@ -43,6 +47,23 @@ class ChannelTelemetry:
     status_text: str = "Active"
     fault_alarm: bool | None = None
 
+    def apply_snapshot(self, snap: TelemetrySnapshot) -> None:
+        """Update non-None fields from a TelemetrySnapshot."""
+        for attr in (
+            "voltage",
+            "current",
+            "power",
+            "ovp_tripped",
+            "ocp_tripped",
+            "opp_tripped",
+            "status_text",
+            "fault_alarm",
+            "output_enabled",
+        ):
+            val = getattr(snap, attr)
+            if val is not None:
+                setattr(self, attr, val)
+
 
 @dataclass
 class TelemetrySnapshot:
@@ -54,7 +75,6 @@ class TelemetrySnapshot:
     ovp_tripped: bool | None = None
     ocp_tripped: bool | None = None
     opp_tripped: bool | None = None
-    status_code: int | None = None
     status_text: str | None = None
     fault_alarm: bool | None = None
     output_enabled: bool | None = None
@@ -105,7 +125,7 @@ def parse_idn(raw_idn: str | None) -> PsuIdentity:
             serial_number=None,
             firmware=None,
             raw_idn=raw_idn or "",
-            profile_key="standard",
+            profile_key=PROFILE_STANDARD,
             hw_max_voltage=60.0,
             hw_max_current=10.0,
             channels=1,
@@ -128,7 +148,7 @@ def parse_idn(raw_idn: str | None) -> PsuIdentity:
     )
     has_dmm = model_upper.startswith("SPM")
 
-    profile_key = "owon" if is_owon else "standard"
+    profile_key = PROFILE_OWON if is_owon else PROFILE_STANDARD
 
     hw_v, hw_i, channels = KNOWN_MODEL_SPECS.get(model_upper, (60.0, 10.0, 1))
 

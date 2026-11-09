@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from serialx import SerialException
@@ -142,13 +143,39 @@ def test_standard_profile_commands() -> None:
     assert profile.format_set_output(False) == "OUTP OFF"
 
 
+def _attach_responder(client: ScpiPsuClient, responder: Any) -> MagicMock:
+    """Attach a command-driven transport responder to a client instance."""
+    pending_line = b""
+
+    def _on_write(data: bytes) -> None:
+        nonlocal pending_line
+        cmd = data.decode("ascii", errors="ignore").strip()
+        ans = responder(cmd)
+        pending_line = f"{ans}\r\n".encode("ascii") if ans is not None else b""
+
+    async def _on_readline() -> bytes:
+        return pending_line
+
+    mock_reader = AsyncMock(spec=asyncio.StreamReader)
+    mock_reader.readline.side_effect = _on_readline
+    mock_writer = MagicMock()
+    mock_writer.is_closing.return_value = False
+    mock_writer.write.side_effect = _on_write
+    mock_writer.drain = AsyncMock()
+    mock_writer.wait_closed = AsyncMock()
+
+    client._reader = mock_reader
+    client._writer = mock_writer
+    client._connected = True
+    return mock_writer
+
+
 async def test_client_transport_lifecycle_and_queries() -> None:
-    client = ScpiPsuClient("socket://127.0.0.1:5025")
+    client = ScpiPsuClient("socket://127.0.0.1:5025", command_delay=0.0, write_delay=0.0)
     assert client.is_connected is False
     assert client.profile.key == "standard"
 
     mock_reader = AsyncMock(spec=asyncio.StreamReader)
-    mock_reader._buffer = bytearray(b"stale")
     mock_reader.readline.return_value = b"OWON,SPE6103,12345,V1.0\r\n"
 
     mock_writer = MagicMock()
@@ -156,13 +183,10 @@ async def test_client_transport_lifecycle_and_queries() -> None:
     mock_writer.drain = AsyncMock()
     mock_writer.wait_closed = AsyncMock()
 
-    with (
-        patch(
-            "custom_components.scpi_psu.scpi_psu_client.client.open_serial_connection",
-            new_callable=AsyncMock,
-            return_value=(mock_reader, mock_writer),
-        ),
-        patch("asyncio.sleep", new_callable=AsyncMock),
+    with patch(
+        "custom_components.scpi_psu.scpi_psu_client.client.open_serial_connection",
+        new_callable=AsyncMock,
+        return_value=(mock_reader, mock_writer),
     ):
         await client.connect()
         assert client.is_connected is True
@@ -172,7 +196,6 @@ async def test_client_transport_lifecycle_and_queries() -> None:
         assert client.is_connected is True
 
         # Probe identity
-        mock_reader.read.side_effect = TimeoutError()
         ident = await client.probe_identity()
         assert ident.manufacturer == "OWON"
         assert client.profile.key == "owon"
@@ -232,119 +255,107 @@ async def test_client_configured_profile_override() -> None:
 
 
 async def test_client_telemetry_and_controls() -> None:
-    owon_client = ScpiPsuClient("socket://127.0.0.1:5025", initial_idn="OWON,SPE6103,1234,1.0")
-    with patch.object(owon_client, "_query_unlocked", new_callable=AsyncMock) as mock_owon_q:
-        mock_owon_q.return_value = "30.000, 2.500, 75.000, 0, 0, 0, 1"
-        owon_snap = await owon_client.poll_telemetry()
-        assert owon_snap is not None
-        assert owon_snap.voltage == 30.0
-        assert owon_snap.status_text == "Constant Voltage (CV)"
+    owon_client = ScpiPsuClient(
+        "socket://127.0.0.1:5025",
+        initial_idn="OWON,SPE6103,1234,1.0",
+        command_delay=0.0,
+        write_delay=0.0,
+    )
+    _attach_responder(owon_client, lambda cmd: "30.000, 2.500, 75.000, 0, 0, 0, 1")
+    owon_snap = await owon_client.poll_telemetry()
+    assert owon_snap is not None
+    assert owon_snap.voltage == 30.0
+    assert owon_snap.status_text == "Constant Voltage (CV)"
 
-    client = ScpiPsuClient("socket://127.0.0.1:5025")
-
-    # Command-driven responder avoiding sequential order assumptions
-    def _std_responses(cmd: str, expect_reply: bool = True) -> str | None:
-        table = {
-            "OUTP?": "ON",
-            "MEAS:VOLT?": "10.0",
-            "MEAS:CURR?": "2.5",
-            "MEAS:POW?": "25.0",
-        }
-        return table.get(cmd)
-
-    with patch.object(client, "_query_unlocked", side_effect=_std_responses):
-        snap = await client.poll_telemetry()
-        assert snap is not None
-        assert snap.voltage == 10.0
-        assert snap.current == 2.5
-        assert snap.power == 25.0
-        assert snap.output_enabled is True
+    client = ScpiPsuClient("socket://127.0.0.1:5025", command_delay=0.0, write_delay=0.0)
+    std_table = {
+        "OUTP?": "ON",
+        "MEAS:VOLT?": "10.0",
+        "MEAS:CURR?": "2.5",
+        "MEAS:POW?": "25.0",
+    }
+    _attach_responder(client, lambda cmd: std_table.get(cmd))
+    snap = await client.poll_telemetry()
+    assert snap is not None
+    assert snap.voltage == 10.0
+    assert snap.current == 2.5
+    assert snap.power == 25.0
+    assert snap.output_enabled is True
 
     # Invalid V returns None
-    with patch.object(
-        client, "_query_unlocked", side_effect=lambda cmd, **kw: "ON" if "OUTP" in cmd else None
-    ):
-        assert await client.poll_telemetry() is None
+    _attach_responder(client, lambda cmd: "ON" if "OUTP" in cmd else "bad")
+    assert await client.poll_telemetry() is None
 
     # Invalid I returns None
-    with patch.object(
+    _attach_responder(
         client,
-        "_query_unlocked",
-        side_effect=lambda cmd, **kw: (
-            "999.0" if "CURR" in cmd else ("10.0" if "VOLT" in cmd else "ON")
-        ),
-    ):
-        assert await client.poll_telemetry() is None
+        lambda cmd: "999.0" if "CURR" in cmd else ("10.0" if "VOLT" in cmd else "ON"),
+    )
+    assert await client.poll_telemetry() is None
 
-    with patch.object(client, "_query_unlocked", new_callable=AsyncMock) as mock_q:
-        # Output state queries
-        mock_q.side_effect = None
-        mock_q.return_value = "1"
-        assert await client.get_output() is True
-        mock_q.return_value = "0"
-        assert await client.get_output() is False
-        mock_q.return_value = "UNKNOWN"
-        assert await client.get_output() is None
+    state: dict[str, str] = {"OUTP?": "1"}
 
-        def _dispatch_query(cmd: str, expect_reply: bool = True) -> str | None:
-            if not expect_reply:
-                if "OUTP ON" in cmd:
-                    state["OUTP?"] = "ON"
-                elif "OUTP OFF" in cmd:
-                    state["OUTP?"] = "OFF"
-                return ""
-            if cmd == "OUTP?":
-                return state.get("OUTP?", "ON")
-            if cmd in ("VOLT?", "VOLT:LIM?", "VOLT:PROT?"):
-                return state.get(cmd, "14.5")
-            if cmd in ("CURR?", "CURR:LIM?", "CURR:PROT?"):
-                return state.get(cmd, "3.2")
-            if cmd == "SYST:ERR?":
-                return state.get(cmd, "0,No error")
-            return None
+    def _dispatch_query(cmd: str) -> str | None:
+        if cmd == "OUTP ON":
+            state["OUTP?"] = "ON"
+            return ""
+        if cmd == "OUTP OFF":
+            state["OUTP?"] = "OFF"
+            return ""
+        if cmd == "OUTP?":
+            return state.get("OUTP?", "ON")
+        if cmd in ("VOLT?", "VOLT:LIM?", "VOLT:PROT?"):
+            return state.get(cmd, "14.5")
+        if cmd in ("CURR?", "CURR:LIM?", "CURR:PROT?"):
+            return state.get(cmd, "3.2")
+        if cmd == "SYST:ERR?":
+            return state.get(cmd, "0,No error")
+        return ""
 
-        state: dict[str, str] = {"OUTP?": "ON"}
-        mock_q.side_effect = _dispatch_query
+    writer = _attach_responder(client, _dispatch_query)
 
-        assert await client.set_output(True) is True
-        state["OUTP?"] = "OFF"
-        assert await client.set_output(False) is False
+    assert await client.get_output() is True
+    state["OUTP?"] = "0"
+    assert await client.get_output() is False
+    state["OUTP?"] = "UNKNOWN"
+    assert await client.get_output() is None
 
-        # set_voltage, set_current, set_voltage_limit, set_current_limit
-        state["VOLT?"] = "14.5"
-        assert await client.set_voltage(14.5) == 14.5
-        state["CURR?"] = "3.2"
-        assert await client.set_current(3.2) == 3.2
-        state[client.profile.cmd_get_voltage_limit] = "28.0"
-        assert await client.set_voltage_limit(28.0) == 28.0
-        state[client.profile.cmd_get_current_limit] = "5.5"
-        assert await client.set_current_limit(5.5) == 5.5
+    assert await client.set_output(True) is True
+    assert await client.set_output(False) is False
 
-        # get_system_error, get_setpoints, get_config_registers, clear_faults
-        state["SYST:ERR?"] = "0,No error"
-        assert await client.get_system_error() == "0,No error"
-        state["SYST:ERR?"] = "ON"
-        assert await client.get_system_error() is None
+    # set_voltage, set_current, set_voltage_limit, set_current_limit
+    state["VOLT?"] = "14.5"
+    assert await client.set_voltage(14.5) == 14.5
+    state["CURR?"] = "3.2"
+    assert await client.set_current(3.2) == 3.2
+    state[client.profile.cmd_get_voltage_limit] = "28.0"
+    assert await client.set_voltage_limit(28.0) == 28.0
+    state[client.profile.cmd_get_current_limit] = "5.5"
+    assert await client.set_current_limit(5.5) == 5.5
 
-        state["VOLT?"] = "12.0"
-        state["CURR?"] = "2.0"
-        setpoints = await client.get_setpoints()
-        assert setpoints == {
-            "voltage_setpoint": 12.0,
-            "current_setpoint": 2.0,
-        }
+    # get_system_error, get_setpoints, get_config_registers, clear_faults
+    state["SYST:ERR?"] = "0,No error"
+    assert await client.get_system_error() == "0,No error"
+    state["SYST:ERR?"] = ""
+    assert await client.get_system_error() is None
 
-        state[client.profile.cmd_get_voltage_limit] = "30.0"
-        state[client.profile.cmd_get_current_limit] = "5.0"
-        regs = await client.get_config_registers()
-        assert regs == {
-            "voltage_limit": 30.0,
-            "current_limit": 5.0,
-            "voltage_setpoint": 12.0,
-            "current_setpoint": 2.0,
-        }
+    state["VOLT?"] = "12.0"
+    state["CURR?"] = "2.0"
+    setpoints = await client.get_setpoints()
+    assert setpoints == {
+        "voltage_setpoint": 12.0,
+        "current_setpoint": 2.0,
+    }
 
-        mock_q.side_effect = None
-        mock_q.return_value = ""
-        await client.clear_faults()
-        mock_q.assert_called_with("*CLS", expect_reply=False)
+    state[client.profile.cmd_get_voltage_limit] = "30.0"
+    state[client.profile.cmd_get_current_limit] = "5.0"
+    regs = await client.get_config_registers()
+    assert regs == {
+        "voltage_limit": 30.0,
+        "current_limit": 5.0,
+        "voltage_setpoint": 12.0,
+        "current_setpoint": 2.0,
+    }
+
+    await client.clear_faults()
+    writer.write.assert_called_with(b"*CLS\n")

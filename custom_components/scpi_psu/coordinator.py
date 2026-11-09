@@ -28,16 +28,6 @@ from .const import (
     dmm_identifier,
 )
 from .scpi_psu_client import (
-    FIELD_CURRENT,
-    FIELD_DMM,
-    FIELD_FAULT_ALARM,
-    FIELD_OCP_TRIPPED,
-    FIELD_OPP_TRIPPED,
-    FIELD_OUTPUT_ENABLED,
-    FIELD_OVP_TRIPPED,
-    FIELD_POWER,
-    FIELD_STATUS_TEXT,
-    FIELD_VOLTAGE,
     ChannelTelemetry,
     PsuIdentity,
     ScpiProfile,
@@ -54,15 +44,6 @@ class ScpiPsuData:
 
     connected: bool = False
     responding: bool = False
-    voltage: float | None = None
-    current: float | None = None
-    power: float | None = None
-    ovp_tripped: bool | None = None
-    ocp_tripped: bool | None = None
-    opp_tripped: bool | None = None
-    status_text: str = "Unresponsive / Power Lost"
-    fault_alarm: bool | None = None
-    output_enabled: bool | None = None
     all_outputs_enabled: bool | None = None
     voltage_setpoint: float | None = None
     current_setpoint: float | None = None
@@ -72,6 +53,13 @@ class ScpiPsuData:
     system_error: str | None = None
     dmm_reading: float | None = None
     channels: dict[int, ChannelTelemetry] = field(default_factory=dict)
+
+    @property
+    def ch1(self) -> ChannelTelemetry:
+        """Return primary Channel 1 telemetry."""
+        return self.channels.setdefault(
+            1, ChannelTelemetry(channel=1, status_text="Unresponsive / Power Lost")
+        )
 
 
 class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
@@ -149,28 +137,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         """Compute the map of channels to actively needed measurement fields."""
         if self._registered_fields:
             return {ch: set(f_map.keys()) for ch, f_map in self._registered_fields.items() if f_map}
-        ch1_fields = {
-            FIELD_VOLTAGE,
-            FIELD_CURRENT,
-            FIELD_POWER,
-            FIELD_OUTPUT_ENABLED,
-            FIELD_STATUS_TEXT,
-            FIELD_FAULT_ALARM,
-            FIELD_OVP_TRIPPED,
-            FIELD_OCP_TRIPPED,
-            FIELD_OPP_TRIPPED,
-        }
-        if self.identity.has_dmm:
-            ch1_fields.add(FIELD_DMM)
-        result: dict[int, set[str]] = {1: ch1_fields}
-        for ch in range(2, self.identity.channels + 1):
-            result[ch] = {FIELD_OUTPUT_ENABLED}
-        return result
-
-    @property
-    def active_fields(self) -> set[str]:
-        """Compute the union of fields actively needed on primary channel 1."""
-        return self.active_fields_by_channel.get(1, set())
+        return self.client.default_fields_by_channel()
 
     @property
     def identity(self) -> PsuIdentity:
@@ -230,12 +197,9 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
 
     def _mark_unresponsive(self) -> None:
         self._state.responding = False
-        self._state.voltage = None
-        self._state.current = None
-        self._state.power = None
-        self._state.status_text = "Unresponsive / Power Lost"
-        self._state.fault_alarm = None
-        self._state.output_enabled = None
+        self._state.channels[1] = ChannelTelemetry(
+            channel=1, status_text="Unresponsive / Power Lost"
+        )
 
     async def _async_update_data(self) -> ScpiPsuData:
         if not self._state.idn or "," not in self._state.idn:
@@ -266,8 +230,6 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         for snap in all_telemetry.values():
             self._apply_telemetry(snap)
 
-        self._sync_all_outputs_enabled()
-
         now = time.monotonic()
         if now - self._last_full_poll >= 60.0 or self._state.voltage_setpoint is None:
             registers = await self.client.get_config_registers()
@@ -289,49 +251,10 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
     def _apply_telemetry(self, snap: TelemetrySnapshot) -> None:
         ch = snap.channel
         ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
-        if snap.voltage is not None:
-            ch_data.voltage = snap.voltage
-        if snap.current is not None:
-            ch_data.current = snap.current
-        if snap.power is not None:
-            ch_data.power = snap.power
-        if snap.ovp_tripped is not None:
-            ch_data.ovp_tripped = snap.ovp_tripped
-        if snap.ocp_tripped is not None:
-            ch_data.ocp_tripped = snap.ocp_tripped
-        if snap.opp_tripped is not None:
-            ch_data.opp_tripped = snap.opp_tripped
-        if snap.status_text is not None:
-            ch_data.status_text = snap.status_text
-        if snap.fault_alarm is not None:
-            ch_data.fault_alarm = snap.fault_alarm
-        if snap.output_enabled is not None:
-            ch_data.output_enabled = snap.output_enabled
+        ch_data.apply_snapshot(snap)
+        if ch == 1 and snap.dmm_reading is not None:
+            self._state.dmm_reading = snap.dmm_reading
 
-        # Update root state (representing channel 1 / primary output)
-        if ch == 1:
-            if snap.voltage is not None:
-                self._state.voltage = snap.voltage
-            if snap.current is not None:
-                self._state.current = snap.current
-            if snap.power is not None:
-                self._state.power = snap.power
-            if snap.ovp_tripped is not None:
-                self._state.ovp_tripped = snap.ovp_tripped
-            if snap.ocp_tripped is not None:
-                self._state.ocp_tripped = snap.ocp_tripped
-            if snap.opp_tripped is not None:
-                self._state.opp_tripped = snap.opp_tripped
-            if snap.status_text is not None:
-                self._state.status_text = snap.status_text
-            if snap.fault_alarm is not None:
-                self._state.fault_alarm = snap.fault_alarm
-            if snap.dmm_reading is not None:
-                self._state.dmm_reading = snap.dmm_reading
-            if snap.output_enabled is not None:
-                self._state.output_enabled = snap.output_enabled
-
-        # Update all_outputs_enabled summary
         self._sync_all_outputs_enabled()
 
     def _sync_all_outputs_enabled(self) -> None:
@@ -362,13 +285,13 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
     async def async_set_output(self, enabled: bool, channel: int = 1) -> None:
         actual = await self.client.set_output(enabled, channel=channel)
         snap = await self.client.poll_telemetry(channel=channel)
-        if snap is not None:
-            self._apply_telemetry(snap)
         ch_data = self._state.channels.setdefault(channel, ChannelTelemetry(channel=channel))
         ch_data.output_enabled = actual
-        if channel == 1:
-            self._state.output_enabled = actual
-        self._sync_all_outputs_enabled()
+        if snap is not None:
+            snap.output_enabled = actual
+            self._apply_telemetry(snap)
+        else:
+            self._sync_all_outputs_enabled()
         self.async_set_updated_data(self._state)
 
     async def async_set_all_outputs(self, enabled: bool) -> None:
@@ -380,7 +303,6 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         for ch in range(1, self.identity.channels + 1):
             ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
             ch_data.output_enabled = actual
-        self._state.output_enabled = actual
         self._state.all_outputs_enabled = actual
         self.async_set_updated_data(self._state)
 

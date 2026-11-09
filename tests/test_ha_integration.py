@@ -67,14 +67,9 @@ async def test_integration_setup_and_unload(
 
     with (
         patch(
-            "custom_components.scpi_psu.scpi_psu_client.client.ScpiPsuClient.poll_telemetry",
+            "custom_components.scpi_psu.scpi_psu_client.client.ScpiPsuClient.poll_all_channels",
             new_callable=AsyncMock,
-            return_value=snap,
-        ),
-        patch(
-            "custom_components.scpi_psu.scpi_psu_client.client.ScpiPsuClient.get_output",
-            new_callable=AsyncMock,
-            return_value=True,
+            return_value={1: snap},
         ),
         patch(
             "custom_components.scpi_psu.scpi_psu_client.client.ScpiPsuClient.get_config_registers",
@@ -140,8 +135,7 @@ async def test_coordinator_update_and_unresponsive_recovery(
     )
 
     with (
-        patch.object(coordinator.client, "poll_telemetry", new_callable=AsyncMock) as mock_poll,
-        patch.object(coordinator.client, "get_output", new_callable=AsyncMock) as mock_outp,
+        patch.object(coordinator.client, "poll_all_channels", new_callable=AsyncMock) as mock_poll,
         patch.object(
             coordinator.client, "get_config_registers", new_callable=AsyncMock
         ) as mock_regs,
@@ -149,8 +143,7 @@ async def test_coordinator_update_and_unresponsive_recovery(
         patch.object(coordinator.client, "get_system_error", new_callable=AsyncMock) as mock_err,
         patch.object(coordinator.client, "close", new_callable=AsyncMock) as mock_close,
     ):
-        mock_poll.return_value = snap
-        mock_outp.return_value = True
+        mock_poll.return_value = {1: snap}
         mock_regs.return_value = {
             "voltage_limit": 60.0,
             "current_limit": 10.0,
@@ -165,12 +158,11 @@ async def test_coordinator_update_and_unresponsive_recovery(
 
         data = await coordinator._async_update_data()
         assert data.responding is True
-        assert data.voltage == 12.5
-        assert data.current == 1.2
-        assert data.power == 15.0
-        assert data.output_enabled is True
+        assert data.ch1.voltage == 12.5
+        assert data.ch1.current == 1.2
+        assert data.ch1.power == 15.0
+        assert data.ch1.output_enabled is True
         assert data.voltage_setpoint == 12.5
-        mock_outp.assert_not_awaited()
 
         # Subsequent fast poll syncs setpoints without full config poll
         coordinator.client.set_identity(parse_idn("Rigol Technologies,DP832,123,1.0"))
@@ -181,10 +173,9 @@ async def test_coordinator_update_and_unresponsive_recovery(
             output_enabled=False,
             status_text="Standby / Output Off",
         )
-        mock_poll.return_value = snap_std
-        mock_outp.return_value = False
+        mock_poll.return_value = {1: snap_std}
         data_std = await coordinator._async_update_data()
-        assert data_std.status_text == "Standby / Output Off"
+        assert data_std.ch1.status_text == "Standby / Output Off"
         assert data_std.voltage_setpoint == 13.0
         assert data_std.current_setpoint == 1.5
 
@@ -194,8 +185,8 @@ async def test_coordinator_update_and_unresponsive_recovery(
 
         data2 = await coordinator._async_update_data()
         assert data2.responding is False
-        assert data2.voltage is None
-        assert data2.status_text == "Unresponsive / Power Lost"
+        assert data2.ch1.voltage is None
+        assert data2.ch1.status_text == "Unresponsive / Power Lost"
 
         data3 = await coordinator._async_update_data()
         assert data3.responding is False
@@ -244,8 +235,8 @@ async def test_coordinator_control_methods_and_clamps(
         ),
     ):
         await coordinator.async_set_output(True)
-        assert coordinator.data.output_enabled is True
-        assert coordinator.data.voltage == 24.0
+        assert coordinator.data.ch1.output_enabled is True
+        assert coordinator.data.ch1.voltage == 24.0
 
         # Request 50V when clamp is 24V -> should clamp to 24.0
         await coordinator.async_set_voltage(50.0)

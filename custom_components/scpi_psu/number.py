@@ -32,6 +32,7 @@ class ScpiPsuNumberEntityDescription(NumberEntityDescription):
     value_fn: Callable[[ScpiPsuData], float | None]
     max_fn: Callable[[ScpiPsuCoordinator], float]
     set_fn: Callable[[ScpiPsuCoordinator, float], Awaitable[None]]
+    is_supported_fn: Callable[[ScpiPsuData], bool] = lambda _: True
 
 
 NUMBERS: tuple[ScpiPsuNumberEntityDescription, ...] = (
@@ -71,6 +72,7 @@ NUMBERS: tuple[ScpiPsuNumberEntityDescription, ...] = (
         value_fn=lambda d: d.voltage_limit,
         max_fn=lambda coord: coord.effective_max_voltage,
         set_fn=lambda coord, val: coord.async_set_voltage_limit(val),
+        is_supported_fn=lambda d: d.voltage_limit is not None,
     ),
     ScpiPsuNumberEntityDescription(
         key="overcurrent_limit",
@@ -84,6 +86,7 @@ NUMBERS: tuple[ScpiPsuNumberEntityDescription, ...] = (
         value_fn=lambda d: d.current_limit,
         max_fn=lambda coord: coord.effective_max_current,
         set_fn=lambda coord, val: coord.async_set_current_limit(val),
+        is_supported_fn=lambda d: d.current_limit is not None,
     ),
 )
 
@@ -95,14 +98,13 @@ async def async_setup_entry(
 ) -> None:
     """Set up SCPI PSU number entities."""
     coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[ScpiPsuNumber] = []
-    for description in NUMBERS:
-        if description.key == "overvoltage_limit" and coordinator.data.voltage_limit is None:
-            continue
-        if description.key == "overcurrent_limit" and coordinator.data.current_limit is None:
-            continue
-        entities.append(ScpiPsuNumber(coordinator, description))
-    async_add_entities(entities)
+    async_add_entities(
+        [
+            ScpiPsuNumber(coordinator, description)
+            for description in NUMBERS
+            if description.is_supported_fn(coordinator.data)
+        ]
+    )
 
 
 class ScpiPsuNumber(CoordinatorEntity[ScpiPsuCoordinator], NumberEntity):

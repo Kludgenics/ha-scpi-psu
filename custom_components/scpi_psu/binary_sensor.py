@@ -13,11 +13,18 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import ChildDeviceInfo, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import ScpiPsuCoordinator, ScpiPsuData
+from .scpi_psu_client import (
+    FIELD_FAULT_ALARM,
+    FIELD_OCP_TRIPPED,
+    FIELD_OPP_TRIPPED,
+    FIELD_OVP_TRIPPED,
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -26,6 +33,12 @@ class ScpiPsuBinarySensorEntityDescription(BinarySensorEntityDescription):
 
     value_fn: Callable[[ScpiPsuData], bool | None]
     measurement_field: str | None = None
+    is_supported_fn: Callable[[ScpiPsuCoordinator], bool] = lambda coord: (
+        coord.profile.reports_status_in_telemetry
+    )
+    device_info_fn: Callable[[ScpiPsuCoordinator], DeviceInfo | ChildDeviceInfo] = lambda coord: (
+        coord.channel_device_info(1)
+    )
 
 
 BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
@@ -33,8 +46,8 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
         key="fault",
         name="Fault",
         device_class=BinarySensorDeviceClass.PROBLEM,
-        value_fn=lambda d: d.fault_alarm,
-        measurement_field="fault_alarm",
+        value_fn=lambda d: d.ch1.fault_alarm,
+        measurement_field=FIELD_FAULT_ALARM,
     ),
     ScpiPsuBinarySensorEntityDescription(
         key="connected",
@@ -42,30 +55,32 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda d: bool(d.connected and d.responding),
+        is_supported_fn=lambda _: True,
+        device_info_fn=lambda coord: coord.device_info,
     ),
     ScpiPsuBinarySensorEntityDescription(
         key="ovp_tripped",
         name="Overvoltage Protection (OVP)",
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.ovp_tripped,
-        measurement_field="ovp_tripped",
+        value_fn=lambda d: d.ch1.ovp_tripped,
+        measurement_field=FIELD_OVP_TRIPPED,
     ),
     ScpiPsuBinarySensorEntityDescription(
         key="ocp_tripped",
         name="Overcurrent Protection (OCP)",
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.ocp_tripped,
-        measurement_field="ocp_tripped",
+        value_fn=lambda d: d.ch1.ocp_tripped,
+        measurement_field=FIELD_OCP_TRIPPED,
     ),
     ScpiPsuBinarySensorEntityDescription(
         key="opp_tripped",
         name="Overpower Protection (OPP)",
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.opp_tripped,
-        measurement_field="opp_tripped",
+        value_fn=lambda d: d.ch1.opp_tripped,
+        measurement_field=FIELD_OPP_TRIPPED,
     ),
 )
 
@@ -77,15 +92,13 @@ async def async_setup_entry(
 ) -> None:
     """Set up SCPI PSU binary sensors."""
     coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[ScpiPsuBinarySensor] = []
-    for description in BINARY_SENSORS:
-        if (
-            description.key in ("fault", "ovp_tripped", "ocp_tripped", "opp_tripped")
-            and not coordinator.profile.reports_status_in_telemetry
-        ):
-            continue
-        entities.append(ScpiPsuBinarySensor(coordinator, description))
-    async_add_entities(entities)
+    async_add_entities(
+        [
+            ScpiPsuBinarySensor(coordinator, description)
+            for description in BINARY_SENSORS
+            if description.is_supported_fn(coordinator)
+        ]
+    )
 
 
 class ScpiPsuBinarySensor(CoordinatorEntity[ScpiPsuCoordinator], BinarySensorEntity):
@@ -102,10 +115,7 @@ class ScpiPsuBinarySensor(CoordinatorEntity[ScpiPsuCoordinator], BinarySensorEnt
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
-        if description.key in ("fault", "ovp_tripped", "ocp_tripped", "opp_tripped"):
-            self._attr_device_info = coordinator.channel_device_info(1)
-        else:
-            self._attr_device_info = coordinator.device_info
+        self._attr_device_info = description.device_info_fn(coordinator)
 
     async def async_added_to_hass(self) -> None:
         """Register field interest with coordinator when entity is added."""

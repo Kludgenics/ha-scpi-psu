@@ -5,7 +5,10 @@ from __future__ import annotations
 from .client import ScpiPsuClient
 from .dialects import PROFILES, OwonScpiProfile, ScpiProfile, StandardScpiProfile
 from .models import (
+    DEFAULT_BAUDRATE,
     KNOWN_MODEL_SPECS,
+    PROFILE_OWON,
+    PROFILE_STANDARD,
     ChannelTelemetry,
     PsuIdentity,
     TelemetrySnapshot,
@@ -14,6 +17,7 @@ from .models import (
 )
 
 __all__ = [
+    "DEFAULT_BAUDRATE",
     "FIELD_CURRENT",
     "FIELD_DMM",
     "FIELD_FAULT_ALARM",
@@ -26,6 +30,8 @@ __all__ = [
     "FIELD_VOLTAGE",
     "KNOWN_MODEL_SPECS",
     "PROFILES",
+    "PROFILE_OWON",
+    "PROFILE_STANDARD",
     "ChannelTelemetry",
     "LatencyTracker",
     "OwonScpiProfile",

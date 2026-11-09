@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 from typing import Protocol
 
-from .models import TelemetrySnapshot, parse_strict_float
+from .models import PROFILE_OWON, PROFILE_STANDARD, TelemetrySnapshot, parse_strict_float
 
 
 def parse_output_state(raw: str | None) -> bool | None:
@@ -79,7 +79,7 @@ class BaseScpiProfile:
 class OwonScpiProfile(BaseScpiProfile):
     """OWON / Abestop / Kiprim SCPI dialect (MEAS:ALL:INFO?, VOLT:LIM, CURR:LIM)."""
 
-    key = "owon"
+    key = PROFILE_OWON
     cmd_get_voltage_limit = "VOLT:LIM?"
     cmd_get_current_limit = "CURR:LIM?"
     cmd_get_dmm_reading = ":READ?"
@@ -150,7 +150,6 @@ class OwonScpiProfile(BaseScpiProfile):
             ovp_tripped=ovp,
             ocp_tripped=ocp,
             opp_tripped=bool(opp),
-            status_code=code,
             status_text=status_text,
             fault_alarm=fault,
             output_enabled=outp,
@@ -160,7 +159,7 @@ class OwonScpiProfile(BaseScpiProfile):
 class StandardScpiProfile(BaseScpiProfile):
     """Standard IEEE 488.2 / SCPI-1999 PSU dialect (MEAS:VOLT?, VOLT:PROT, CURR:PROT)."""
 
-    key = "standard"
+    key = PROFILE_STANDARD
     cmd_get_voltage_limit = "VOLT:PROT?"
     cmd_get_current_limit = "CURR:PROT?"
     cmd_get_dmm_reading = "MEAS:VOLT:DC?"
@@ -185,6 +184,6 @@ class StandardScpiProfile(BaseScpiProfile):
 
 
 PROFILES: dict[str, OwonScpiProfile | StandardScpiProfile] = {
-    "owon": OwonScpiProfile(),
-    "standard": StandardScpiProfile(),
+    PROFILE_OWON: OwonScpiProfile(),
+    PROFILE_STANDARD: StandardScpiProfile(),
 }

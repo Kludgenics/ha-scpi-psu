@@ -10,8 +10,27 @@ from typing import Any
 from serialx import Parity, SerialException, StopBits, open_serial_connection
 
 from .dialects import PROFILES, ScpiProfile, parse_output_state
-from .models import PsuIdentity, TelemetrySnapshot, parse_idn, parse_strict_float
-from .query_planner import QueryPlanner
+from .models import (
+    DEFAULT_BAUDRATE,
+    PROFILE_STANDARD,
+    PsuIdentity,
+    TelemetrySnapshot,
+    parse_idn,
+    parse_strict_float,
+)
+from .query_planner import (
+    FIELD_CURRENT,
+    FIELD_DMM,
+    FIELD_FAULT_ALARM,
+    FIELD_OCP_TRIPPED,
+    FIELD_OPP_TRIPPED,
+    FIELD_OUTPUT_ENABLED,
+    FIELD_OVP_TRIPPED,
+    FIELD_POWER,
+    FIELD_STATUS_TEXT,
+    FIELD_VOLTAGE,
+    QueryPlanner,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,7 +41,7 @@ class ScpiPsuClient:
     def __init__(
         self,
         serial_url: str,
-        baudrate: int = 115200,
+        baudrate: int = DEFAULT_BAUDRATE,
         initial_idn: str | None = None,
         profile_key: str | None = None,
         command_delay: float = 0.10,
@@ -51,7 +70,27 @@ class ScpiPsuClient:
     def profile(self) -> ScpiProfile:
         if self.configured_profile and self.configured_profile in PROFILES:
             return PROFILES[self.configured_profile]
-        return PROFILES.get(self.identity.profile_key, PROFILES["standard"])
+        return PROFILES.get(self.identity.profile_key, PROFILES[PROFILE_STANDARD])
+
+    def default_fields_by_channel(self) -> dict[int, set[str]]:
+        """Return the default telemetry fields to poll for each hardware channel."""
+        ch1_fields = {
+            FIELD_VOLTAGE,
+            FIELD_CURRENT,
+            FIELD_POWER,
+            FIELD_OUTPUT_ENABLED,
+            FIELD_STATUS_TEXT,
+            FIELD_FAULT_ALARM,
+            FIELD_OVP_TRIPPED,
+            FIELD_OCP_TRIPPED,
+            FIELD_OPP_TRIPPED,
+        }
+        if self.identity.has_dmm:
+            ch1_fields.add(FIELD_DMM)
+        result: dict[int, set[str]] = {1: ch1_fields}
+        for ch in range(2, self.identity.channels + 1):
+            result[ch] = {FIELD_OUTPUT_ENABLED}
+        return result
 
     async def connect(self) -> None:
         async with self._lock:
@@ -96,21 +135,11 @@ class ScpiPsuClient:
             _LOGGER.info("Connected to SCPI PSU at %s", self.serial_url)
             if self.write_delay > 0:
                 await asyncio.sleep(self.write_delay)
-            self._drain_rx_unlocked()
             return True
         except (OSError, SerialException, TimeoutError) as err:
             _LOGGER.debug("serialx connect to %s failed: %s", self.serial_url, err)
             self._connected = False
             return False
-
-    def _drain_rx_unlocked(self) -> None:
-        """Drain any stale unread bytes from the transport non-blockingly."""
-        if self._reader is None:
-            return
-        # If StreamReader has an internal buffer with data, clear it without blocking
-        buffer: bytearray = getattr(self._reader, "_buffer", bytearray())
-        if buffer:
-            buffer.clear()
 
     async def query(self, cmd: str, expect_reply: bool = True) -> str | None:
         """Send an SCPI query and return response line."""
@@ -121,7 +150,6 @@ class ScpiPsuClient:
         if not await self._ensure_connected_unlocked():
             return None
 
-        self._drain_rx_unlocked()
         payload = (cmd.strip() + "\n").encode("ascii", errors="ignore")
         start_t = time.monotonic()
 
@@ -185,18 +213,7 @@ class ScpiPsuClient:
         fields = (
             needed_fields
             if needed_fields is not None
-            else {
-                "voltage",
-                "current",
-                "power",
-                "output_enabled",
-                "status_text",
-                "fault_alarm",
-                "ovp_tripped",
-                "ocp_tripped",
-                "opp_tripped",
-            }
-            | ({"dmm_reading"} if self.identity.has_dmm else set())
+            else self.default_fields_by_channel().get(channel, {FIELD_OUTPUT_ENABLED})
         )
         if not fields:
             return None
@@ -218,14 +235,14 @@ class ScpiPsuClient:
         if not results:
             return None
 
-        raw_v = results.get("voltage")
-        raw_i = results.get("current")
-        raw_p = results.get("power")
+        raw_v = results.get(FIELD_VOLTAGE)
+        raw_i = results.get(FIELD_CURRENT)
+        raw_p = results.get(FIELD_POWER)
 
         # Require requested primary measurements to succeed
-        if "voltage" in fields and raw_v is None:
+        if FIELD_VOLTAGE in fields and raw_v is None:
             return None
-        if "current" in fields and raw_i is None:
+        if FIELD_CURRENT in fields and raw_i is None:
             return None
 
         val_v = float(raw_v) if raw_v is not None else None
@@ -237,12 +254,12 @@ class ScpiPsuClient:
         else:
             val_p = None
 
-        outp = results.get("output_enabled")
-        if outp is None and "output_enabled" in fields and self.identity.channels > 1:
+        outp = results.get(FIELD_OUTPUT_ENABLED)
+        if outp is None and FIELD_OUTPUT_ENABLED in fields and self.identity.channels > 1:
             outp = await self._get_output_unlocked(channel=channel)
 
-        status = results.get("status_text")
-        if status is None and "status_text" in fields:
+        status = results.get(FIELD_STATUS_TEXT)
+        if status is None and FIELD_STATUS_TEXT in fields:
             status = "Active" if outp is not False else "Standby / Output Off"
 
         return TelemetrySnapshot(
@@ -251,11 +268,11 @@ class ScpiPsuClient:
             power=val_p,
             output_enabled=outp,
             status_text=str(status) if status is not None else None,
-            fault_alarm=results.get("fault_alarm"),
-            ovp_tripped=results.get("ovp_tripped"),
-            ocp_tripped=results.get("ocp_tripped"),
-            opp_tripped=results.get("opp_tripped"),
-            dmm_reading=results.get("dmm_reading"),
+            fault_alarm=results.get(FIELD_FAULT_ALARM),
+            ovp_tripped=results.get(FIELD_OVP_TRIPPED),
+            ocp_tripped=results.get(FIELD_OCP_TRIPPED),
+            opp_tripped=results.get(FIELD_OPP_TRIPPED),
+            dmm_reading=results.get(FIELD_DMM),
             channel=channel,
         )
 
@@ -286,14 +303,16 @@ class ScpiPsuClient:
     ) -> dict[int, TelemetrySnapshot] | None:
         """Poll telemetry across all configured channels."""
         total_ch = max(1, self.identity.channels)
+        field_map = (
+            needed_fields_by_channel
+            if needed_fields_by_channel is not None
+            else self.default_fields_by_channel()
+        )
         results: dict[int, TelemetrySnapshot] = {}
         for ch in range(1, total_ch + 1):
-            if needed_fields_by_channel is not None:
-                ch_fields = needed_fields_by_channel.get(ch)
-                if not ch_fields:
-                    continue
-            else:
-                ch_fields = None if ch == 1 else {"output_enabled"}
+            ch_fields = field_map.get(ch)
+            if not ch_fields:
+                continue
             snap = await self.poll_telemetry(channel=ch, needed_fields=ch_fields)
             if snap is None:
                 if ch == 1:
@@ -375,28 +394,31 @@ class ScpiPsuClient:
     async def get_system_error(self) -> str | None:
         async with self._lock:
             err = await self._query_unlocked("SYST:ERR?")
-            if err and err not in ("ON", "OFF") and err.count(",") <= 1:
-                return err
-            return None
+            return err if err else None
 
     async def _query_bounded_float_unlocked(self, cmd: str, max_val: float) -> float | None:
         val = parse_strict_float(await self._query_unlocked(cmd))
         return round(val, 3) if val is not None and 0.0 <= val <= max_val else None
 
-    async def get_setpoints(self) -> dict[str, float | None]:
+    async def _get_setpoints_unlocked(
+        self, max_v_hw: float, max_i_hw: float
+    ) -> dict[str, float | None]:
         prof = self.profile
+        return {
+            "voltage_setpoint": await self._query_bounded_float_unlocked(
+                prof.cmd_get_voltage_setpoint, max_v_hw
+            ),
+            "current_setpoint": await self._query_bounded_float_unlocked(
+                prof.cmd_get_current_setpoint, max_i_hw
+            ),
+        }
+
+    async def get_setpoints(self) -> dict[str, float | None]:
         max_v_hw = self.identity.hw_max_voltage * 1.15
         max_i_hw = self.identity.hw_max_current * 1.15
 
         async with self._lock:
-            return {
-                "voltage_setpoint": await self._query_bounded_float_unlocked(
-                    prof.cmd_get_voltage_setpoint, max_v_hw
-                ),
-                "current_setpoint": await self._query_bounded_float_unlocked(
-                    prof.cmd_get_current_setpoint, max_i_hw
-                ),
-            }
+            return await self._get_setpoints_unlocked(max_v_hw, max_i_hw)
 
     async def get_config_registers(self) -> dict[str, float | None]:
         prof = self.profile
@@ -411,12 +433,7 @@ class ScpiPsuClient:
                 "current_limit": await self._query_bounded_float_unlocked(
                     prof.cmd_get_current_limit, max_i_hw
                 ),
-                "voltage_setpoint": await self._query_bounded_float_unlocked(
-                    prof.cmd_get_voltage_setpoint, max_v_hw
-                ),
-                "current_setpoint": await self._query_bounded_float_unlocked(
-                    prof.cmd_get_current_setpoint, max_i_hw
-                ),
+                **(await self._get_setpoints_unlocked(max_v_hw, max_i_hw)),
             }
 
     async def clear_faults(self) -> None:

@@ -18,7 +18,19 @@ from custom_components.scpi_psu.binary_sensor import BINARY_SENSORS
 from custom_components.scpi_psu.const import CONF_SERIAL_PORT, DOMAIN
 from custom_components.scpi_psu.coordinator import ScpiPsuCoordinator, ScpiPsuData
 from custom_components.scpi_psu.number import NUMBERS
-from custom_components.scpi_psu.scpi_psu_client import ChannelTelemetry
+from custom_components.scpi_psu.scpi_psu_client import (
+    FIELD_CURRENT,
+    FIELD_DMM,
+    FIELD_FAULT_ALARM,
+    FIELD_OCP_TRIPPED,
+    FIELD_OPP_TRIPPED,
+    FIELD_OUTPUT_ENABLED,
+    FIELD_OVP_TRIPPED,
+    FIELD_POWER,
+    FIELD_STATUS_TEXT,
+    FIELD_VOLTAGE,
+    ChannelTelemetry,
+)
 
 
 async def test_sensor_entities(hass: HomeAssistant) -> None:
@@ -31,11 +43,16 @@ async def test_sensor_entities(hass: HomeAssistant) -> None:
     entry.add_to_hass(hass)
     coordinator = ScpiPsuCoordinator(hass, entry)
     coordinator.data = ScpiPsuData(
-        voltage=12.34,
-        current=1.5,
-        power=18.51,
-        status_text="Active",
         system_error="0,No error",
+        channels={
+            1: ChannelTelemetry(
+                channel=1,
+                voltage=12.34,
+                current=1.5,
+                power=18.51,
+                status_text="Active",
+            )
+        },
     )
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
@@ -46,6 +63,14 @@ async def test_sensor_entities(hass: HomeAssistant) -> None:
     # Default device has no DMM, so all sensors except dmm are registered
     assert len(added) == 5
 
+    for ent in added:
+        ent.hass = hass
+        await ent.async_added_to_hass()
+
+    assert coordinator.active_fields_by_channel == {
+        1: {FIELD_VOLTAGE, FIELD_CURRENT, FIELD_POWER, FIELD_STATUS_TEXT}
+    }
+
     sensor_map = {ent.entity_description.key: ent for ent in added}
     assert sensor_map["voltage"].available is True
     assert sensor_map["voltage"].native_value == 12.34
@@ -53,6 +78,10 @@ async def test_sensor_entities(hass: HomeAssistant) -> None:
     assert sensor_map["power"].native_value == 18.51
     assert sensor_map["status"].native_value == "Active"
     assert sensor_map["error_register"].native_value == "0,No error"
+
+    for ent in added:
+        await ent.async_will_remove_from_hass()
+    assert coordinator.active_fields_by_channel == coordinator.client.default_fields_by_channel()
 
     # Test when device has DMM capability (e.g. SPM6103)
     from custom_components.scpi_psu.scpi_psu_client.models import PsuIdentity
@@ -77,7 +106,11 @@ async def test_sensor_entities(hass: HomeAssistant) -> None:
     )
     assert len(dmm_added) == 6
     dmm_map = {ent.entity_description.key: ent for ent in dmm_added}
+    dmm_map["dmm"].hass = hass
+    await dmm_map["dmm"].async_added_to_hass()
+    assert FIELD_DMM in coordinator.active_fields_by_channel[1]
     assert dmm_map["dmm"].native_value == 3.3
+    await dmm_map["dmm"].async_will_remove_from_hass()
 
 
 async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
@@ -92,10 +125,15 @@ async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
     coordinator.data = ScpiPsuData(
         connected=True,
         responding=True,
-        fault_alarm=False,
-        ovp_tripped=False,
-        ocp_tripped=True,
-        opp_tripped=False,
+        channels={
+            1: ChannelTelemetry(
+                channel=1,
+                fault_alarm=False,
+                ovp_tripped=False,
+                ocp_tripped=True,
+                opp_tripped=False,
+            )
+        },
     )
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
@@ -118,10 +156,22 @@ async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
     )
     assert len(added) == len(BINARY_SENSORS)
 
+    for ent in added:
+        ent.hass = hass
+        await ent.async_added_to_hass()
+
+    assert coordinator.active_fields_by_channel == {
+        1: {FIELD_FAULT_ALARM, FIELD_OVP_TRIPPED, FIELD_OCP_TRIPPED, FIELD_OPP_TRIPPED}
+    }
+
     bin_map = {ent.entity_description.key: ent for ent in added}
     assert bin_map["connected"].is_on is True
     assert bin_map["fault"].is_on is False
     assert bin_map["ocp_tripped"].is_on is True
+
+    for ent in added:
+        await ent.async_will_remove_from_hass()
+    assert coordinator.active_fields_by_channel == coordinator.client.default_fields_by_channel()
 
 
 async def test_switch_entity(hass: HomeAssistant) -> None:
@@ -133,7 +183,7 @@ async def test_switch_entity(hass: HomeAssistant) -> None:
     )
     entry.add_to_hass(hass)
     coordinator = ScpiPsuCoordinator(hass, entry)
-    coordinator.data = ScpiPsuData(output_enabled=True)
+    coordinator.data = ScpiPsuData(channels={1: ChannelTelemetry(channel=1, output_enabled=True)})
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     added: list[switch.ScpiPsuOutputSwitch] = []
@@ -143,14 +193,20 @@ async def test_switch_entity(hass: HomeAssistant) -> None:
     assert len(added) == 1
 
     sw = added[0]
+    sw.hass = hass
+    await sw.async_added_to_hass()
+    assert coordinator.active_fields_by_channel == {1: {FIELD_OUTPUT_ENABLED}}
     assert sw.is_on is True
 
     with patch.object(coordinator, "async_set_output", new_callable=AsyncMock) as mock_set:
         await sw.async_turn_off()
-        mock_set.assert_awaited_once_with(False)
+        mock_set.assert_awaited_once_with(False, channel=1)
 
         await sw.async_turn_on()
-        mock_set.assert_awaited_with(True)
+        mock_set.assert_awaited_with(True, channel=1)
+
+    await sw.async_will_remove_from_hass()
+    assert coordinator.active_fields_by_channel == coordinator.client.default_fields_by_channel()
 
 
 async def test_multichannel_switch_entities(hass: HomeAssistant) -> None:
@@ -176,7 +232,6 @@ async def test_multichannel_switch_entities(hass: HomeAssistant) -> None:
         )
     )
     coordinator.data = ScpiPsuData(
-        output_enabled=True,
         all_outputs_enabled=False,
         channels={
             1: ChannelTelemetry(channel=1, output_enabled=True),
@@ -191,6 +246,16 @@ async def test_multichannel_switch_entities(hass: HomeAssistant) -> None:
         hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
     )
     assert len(added) == 4
+    for ent in added:
+        ent.hass = hass
+        await ent.async_added_to_hass()
+
+    assert coordinator.active_fields_by_channel == {
+        1: {FIELD_OUTPUT_ENABLED},
+        2: {FIELD_OUTPUT_ENABLED},
+        3: {FIELD_OUTPUT_ENABLED},
+    }
+
     master_sw = added[0]
     ch1_sw = added[1]
     ch2_sw = added[2]
@@ -199,7 +264,7 @@ async def test_multichannel_switch_entities(hass: HomeAssistant) -> None:
     assert isinstance(master_sw, switch.ScpiPsuMasterOutputSwitch)
     assert master_sw.is_on is False
 
-    assert isinstance(ch1_sw, switch.ScpiPsuChannelOutputSwitch)
+    assert isinstance(ch1_sw, switch.ScpiPsuOutputSwitch)
     assert ch1_sw.is_on is True
     assert ch2_sw.is_on is False
     assert ch3_sw.is_on is None
@@ -215,6 +280,10 @@ async def test_multichannel_switch_entities(hass: HomeAssistant) -> None:
         mock_set_ch.assert_awaited_once_with(True, channel=2)
         await ch2_sw.async_turn_off()
         mock_set_ch.assert_awaited_with(False, channel=2)
+
+    for ent in added:
+        await ent.async_will_remove_from_hass()
+    assert coordinator.active_fields_by_channel == coordinator.client.default_fields_by_channel()
 
 
 async def test_button_entity(hass: HomeAssistant) -> None:

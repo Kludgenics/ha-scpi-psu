@@ -20,11 +20,19 @@ from homeassistant.const import (
     UnitOfPower,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import ChildDeviceInfo, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import ScpiPsuCoordinator, ScpiPsuData
+from .scpi_psu_client import (
+    FIELD_CURRENT,
+    FIELD_DMM,
+    FIELD_POWER,
+    FIELD_STATUS_TEXT,
+    FIELD_VOLTAGE,
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -33,6 +41,10 @@ class ScpiPsuSensorEntityDescription(SensorEntityDescription):
 
     value_fn: Callable[[ScpiPsuData], Any]
     measurement_field: str | None = None
+    is_supported_fn: Callable[[ScpiPsuCoordinator], bool] = lambda _: True
+    device_info_fn: Callable[[ScpiPsuCoordinator], DeviceInfo | ChildDeviceInfo] = lambda coord: (
+        coord.channel_device_info(1)
+    )
 
 
 SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
@@ -43,8 +55,8 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
-        value_fn=lambda d: d.voltage,
-        measurement_field="voltage",
+        value_fn=lambda d: d.ch1.voltage,
+        measurement_field=FIELD_VOLTAGE,
     ),
     ScpiPsuSensorEntityDescription(
         key="current",
@@ -53,8 +65,8 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.CURRENT,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
-        value_fn=lambda d: d.current,
-        measurement_field="current",
+        value_fn=lambda d: d.ch1.current,
+        measurement_field=FIELD_CURRENT,
     ),
     ScpiPsuSensorEntityDescription(
         key="power",
@@ -63,15 +75,15 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=1,
-        value_fn=lambda d: d.power,
-        measurement_field="power",
+        value_fn=lambda d: d.ch1.power,
+        measurement_field=FIELD_POWER,
     ),
     ScpiPsuSensorEntityDescription(
         key="status",
         name="Status",
         icon="mdi:power-settings",
-        value_fn=lambda d: d.status_text,
-        measurement_field="status_text",
+        value_fn=lambda d: d.ch1.status_text,
+        measurement_field=FIELD_STATUS_TEXT,
     ),
     ScpiPsuSensorEntityDescription(
         key="error_register",
@@ -79,6 +91,7 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:alert-octagon-outline",
         value_fn=lambda d: d.system_error,
+        device_info_fn=lambda coord: coord.device_info,
     ),
     ScpiPsuSensorEntityDescription(
         key="dmm",
@@ -89,7 +102,9 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         icon="mdi:multimeter",
         value_fn=lambda d: d.dmm_reading,
-        measurement_field="dmm_reading",
+        measurement_field=FIELD_DMM,
+        is_supported_fn=lambda coord: coord.identity.has_dmm,
+        device_info_fn=lambda coord: coord.dmm_device_info,
     ),
 )
 
@@ -101,12 +116,13 @@ async def async_setup_entry(
 ) -> None:
     """Set up SCPI PSU sensors."""
     coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[ScpiPsuSensor] = []
-    for description in SENSORS:
-        if description.key == "dmm" and not coordinator.identity.has_dmm:
-            continue
-        entities.append(ScpiPsuSensor(coordinator, description))
-    async_add_entities(entities)
+    async_add_entities(
+        [
+            ScpiPsuSensor(coordinator, description)
+            for description in SENSORS
+            if description.is_supported_fn(coordinator)
+        ]
+    )
 
 
 class ScpiPsuSensor(CoordinatorEntity[ScpiPsuCoordinator], SensorEntity):
@@ -123,12 +139,7 @@ class ScpiPsuSensor(CoordinatorEntity[ScpiPsuCoordinator], SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
-        if description.key == "dmm":
-            self._attr_device_info = coordinator.dmm_device_info
-        elif description.key in ("voltage", "current", "power", "status"):
-            self._attr_device_info = coordinator.channel_device_info(1)
-        else:
-            self._attr_device_info = coordinator.device_info
+        self._attr_device_info = description.device_info_fn(coordinator)
 
     async def async_added_to_hass(self) -> None:
         """Register field interest with coordinator when entity is added."""

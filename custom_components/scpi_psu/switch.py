@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import ScpiPsuCoordinator
+from .scpi_psu_client import FIELD_OUTPUT_ENABLED
 
 
 async def async_setup_entry(
@@ -25,11 +26,9 @@ async def async_setup_entry(
     if coordinator.identity.channels <= 1:
         switches.append(ScpiPsuOutputSwitch(coordinator))
     else:
-        # Master whole-device output switch
         switches.append(ScpiPsuMasterOutputSwitch(coordinator))
-        # Per-channel output switches
         for ch in range(1, coordinator.identity.channels + 1):
-            switches.append(ScpiPsuChannelOutputSwitch(coordinator, channel=ch))
+            switches.append(ScpiPsuOutputSwitch(coordinator, channel=ch, multi_channel=True))
 
     async_add_entities(switches)
 
@@ -40,55 +39,30 @@ class ScpiPsuOutputSwitch(CoordinatorEntity[ScpiPsuCoordinator], SwitchEntity):
     _attr_device_class = SwitchDeviceClass.SWITCH
     _attr_icon = "mdi:electric-switch"
 
-    def __init__(self, coordinator: ScpiPsuCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_output"
-        self._attr_device_info = coordinator.channel_device_info(1)
-
-    @property
-    def is_on(self) -> bool | None:
-        return self.coordinator.data.output_enabled
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        self.coordinator.register_field_interest("output_enabled", channel=1)
-
-    async def async_will_remove_from_hass(self) -> None:
-        self.coordinator.unregister_field_interest("output_enabled", channel=1)
-        await super().async_will_remove_from_hass()
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        await self.coordinator.async_set_output(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        await self.coordinator.async_set_output(False)
-
-
-class ScpiPsuChannelOutputSwitch(CoordinatorEntity[ScpiPsuCoordinator], SwitchEntity):
-    _attr_has_entity_name = True
-    _attr_device_class = SwitchDeviceClass.SWITCH
-    _attr_icon = "mdi:electric-switch"
-
-    def __init__(self, coordinator: ScpiPsuCoordinator, channel: int) -> None:
+    def __init__(
+        self,
+        coordinator: ScpiPsuCoordinator,
+        channel: int = 1,
+        *,
+        multi_channel: bool = False,
+    ) -> None:
         super().__init__(coordinator)
         self.channel = channel
-        self._attr_name = "Output"
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_ch{channel}_output"
+        prefix = f"_ch{channel}" if multi_channel else ""
+        self._attr_unique_id = f"{coordinator.entry.entry_id}{prefix}_output"
         self._attr_device_info = coordinator.channel_device_info(channel)
 
     @property
     def is_on(self) -> bool | None:
         ch_data = self.coordinator.data.channels.get(self.channel)
-        if ch_data is not None and ch_data.output_enabled is not None:
-            return ch_data.output_enabled
-        return None
+        return ch_data.output_enabled if ch_data is not None else None
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self.coordinator.register_field_interest("output_enabled", channel=self.channel)
+        self.coordinator.register_field_interest(FIELD_OUTPUT_ENABLED, channel=self.channel)
 
     async def async_will_remove_from_hass(self) -> None:
-        self.coordinator.unregister_field_interest("output_enabled", channel=self.channel)
+        self.coordinator.unregister_field_interest(FIELD_OUTPUT_ENABLED, channel=self.channel)
         await super().async_will_remove_from_hass()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -116,11 +90,11 @@ class ScpiPsuMasterOutputSwitch(CoordinatorEntity[ScpiPsuCoordinator], SwitchEnt
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         for ch in range(1, self.coordinator.identity.channels + 1):
-            self.coordinator.register_field_interest("output_enabled", channel=ch)
+            self.coordinator.register_field_interest(FIELD_OUTPUT_ENABLED, channel=ch)
 
     async def async_will_remove_from_hass(self) -> None:
         for ch in range(1, self.coordinator.identity.channels + 1):
-            self.coordinator.unregister_field_interest("output_enabled", channel=ch)
+            self.coordinator.unregister_field_interest(FIELD_OUTPUT_ENABLED, channel=ch)
         await super().async_will_remove_from_hass()
 
     async def async_turn_on(self, **kwargs: Any) -> None:

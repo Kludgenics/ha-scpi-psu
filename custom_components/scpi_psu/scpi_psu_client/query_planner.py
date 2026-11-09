@@ -32,7 +32,6 @@ class QueryDescriptor:
 
     command: str
     fields: frozenset[str]
-    channel: int | None = None
     default_latency_ms: float = 20.0
     parser: Callable[[str | None], dict[str, Any]] | None = None
 
@@ -45,7 +44,6 @@ class LatencyTracker:
     default_latency_ms: float = 20.0
     timeout_penalty_ms: float = 500.0
     _latencies: dict[str, float] = field(default_factory=dict)
-    _sample_counts: dict[str, int] = field(default_factory=dict)
 
     def get_latency(self, command: str, fallback_ms: float = 20.0) -> float:
         """Return the current estimated latency in milliseconds for a command."""
@@ -57,19 +55,10 @@ class LatencyTracker:
         current = self._latencies.get(command)
         if current is None:
             self._latencies[command] = effective_latency
-            self._sample_counts[command] = 1
         else:
             self._latencies[command] = (self.alpha * effective_latency) + (
                 (1.0 - self.alpha) * current
             )
-            self._sample_counts[command] += 1
-
-    def dump_stats(self) -> dict[str, dict[str, float | int]]:
-        """Return latency stats for diagnostics."""
-        return {
-            cmd: {"latency_ms": round(lat, 2), "samples": self._sample_counts.get(cmd, 0)}
-            for cmd, lat in self._latencies.items()
-        }
 
 
 def solve_weighted_set_cover(
@@ -187,7 +176,6 @@ class QueryPlanner:
                             FIELD_OPP_TRIPPED,
                         }
                     ),
-                    channel=channel,
                     default_latency_ms=18.0,
                     parser=_parse_composite,
                 )
@@ -203,7 +191,6 @@ class QueryPlanner:
             QueryDescriptor(
                 command="MEAS:VOLT?",
                 fields=frozenset({FIELD_VOLTAGE}),
-                channel=channel,
                 default_latency_ms=12.0,
                 parser=_parse_v,
             )
@@ -218,7 +205,6 @@ class QueryPlanner:
             QueryDescriptor(
                 command="MEAS:CURR?",
                 fields=frozenset({FIELD_CURRENT}),
-                channel=channel,
                 default_latency_ms=12.0,
                 parser=_parse_i,
             )
@@ -233,7 +219,6 @@ class QueryPlanner:
             QueryDescriptor(
                 command="MEAS:POW?",
                 fields=frozenset({FIELD_POWER}),
-                channel=channel,
                 default_latency_ms=12.0,
                 parser=_parse_p,
             )
@@ -259,7 +244,6 @@ class QueryPlanner:
             QueryDescriptor(
                 command=outp_cmd,
                 fields=outp_fields,
-                channel=channel,
                 default_latency_ms=10.0,
                 parser=_parse_outp,
             )
@@ -276,7 +260,6 @@ class QueryPlanner:
                 QueryDescriptor(
                     command=prof.cmd_get_dmm_reading,
                     fields=frozenset({FIELD_DMM}),
-                    channel=channel,
                     default_latency_ms=25.0,
                     parser=_parse_dmm,
                 )
