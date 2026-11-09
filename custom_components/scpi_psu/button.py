@@ -32,11 +32,9 @@ class ScpiPsuResetButton(CoordinatorEntity[ScpiPsuCoordinator], ButtonEntity):
     _attr_icon = "mdi:restart-alert"
 
     def __init__(self, coordinator: ScpiPsuCoordinator) -> None:
-        """Initialize the button."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_clear_fault"
         self._attr_device_info = coordinator.device_info
 
     async def async_press(self) -> None:
-        """Press the button."""
         await self.coordinator.async_reset_errors()

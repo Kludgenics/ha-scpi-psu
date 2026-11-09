@@ -75,10 +75,6 @@ KNOWN_MODEL_SPECS: dict[str, tuple[float, float, int]] = {
     "KA3005P": (30.0, 5.0, 1),
     "KD3005P": (30.0, 5.0, 1),
 }
-# Backward compatibility alias
-KNOWN_MODEL_LIMITS: dict[str, tuple[float, float]] = {
-    k: (v[0], v[1]) for k, v in KNOWN_MODEL_SPECS.items()
-}
 
 OWON_VENDORS = ("owon", "abestop", "kiprim", "multicomp")
 OWON_MODEL_PREFIXES = ("AT6", "SPE", "SPM", "P4", "ODP")

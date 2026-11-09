@@ -20,11 +20,9 @@ from custom_components.scpi_psu.const import (
     CONF_BAUDRATE,
     CONF_MAX_CURRENT_CLAMP,
     CONF_MAX_VOLTAGE_CLAMP,
-    CONF_PROFILE,
     CONF_SCAN_INTERVAL,
     CONF_SERIAL_PORT,
     DOMAIN,
-    PROFILE_OWON,
 )
 from custom_components.scpi_psu.scpi_psu_client.models import PsuIdentity
 
@@ -144,7 +142,6 @@ async def test_options_flow(hass: HomeAssistant) -> None:
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
 
-    # Changing port triggers _async_probe_psu; simulate failure first
     with patch(
         "custom_components.scpi_psu.config_flow._async_probe_psu",
         side_effect=TimeoutError("Timed out"),
@@ -154,20 +151,17 @@ async def test_options_flow(hass: HomeAssistant) -> None:
                 CONF_SERIAL_PORT: "socket://127.0.0.1:5026",
                 CONF_BAUDRATE: 115200,
                 CONF_SCAN_INTERVAL: 5,
-                CONF_PROFILE: PROFILE_OWON,
             }
         )
         assert err_res["type"] is FlowResultType.FORM
         assert err_res["errors"] == {"base": "cannot_connect"}
 
-    # Successful options submission
     with patch("custom_components.scpi_psu.config_flow._async_probe_psu"):
         ok_res = await flow.async_step_init(
             {
                 CONF_SERIAL_PORT: "socket://127.0.0.1:5026",
                 CONF_BAUDRATE: 115200,
                 CONF_SCAN_INTERVAL: 5,
-                CONF_PROFILE: PROFILE_OWON,
                 CONF_MAX_VOLTAGE_CLAMP: 30.0,
                 CONF_MAX_CURRENT_CLAMP: 5.0,
             }

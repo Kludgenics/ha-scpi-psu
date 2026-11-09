@@ -33,20 +33,16 @@ class ScpiPsuOutputSwitch(CoordinatorEntity[ScpiPsuCoordinator], SwitchEntity):
     _attr_icon = "mdi:electric-switch"
 
     def __init__(self, coordinator: ScpiPsuCoordinator) -> None:
-        """Initialize the switch."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_output"
         self._attr_device_info = coordinator.channel_device_info(1)
 
     @property
     def is_on(self) -> bool | None:
-        """Return true if output is enabled, or None if PSU is unresponsive."""
         return self.coordinator.data.output_enabled
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the PSU output on."""
         await self.coordinator.async_set_output(True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the PSU output off."""
         await self.coordinator.async_set_output(False)

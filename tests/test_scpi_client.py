@@ -141,13 +141,12 @@ def test_standard_profile_commands() -> None:
 
 
 async def test_client_transport_lifecycle_and_queries() -> None:
-    client = ScpiPsuClient("socket://127.0.0.1:5025", profile_key="auto")
+    client = ScpiPsuClient("socket://127.0.0.1:5025")
     assert client.is_connected is False
     assert client.profile.key == "standard"
 
     mock_reader = AsyncMock(spec=asyncio.StreamReader)
-    # First read returns stale bytes, second returns empty to finish drain
-    mock_reader.read.side_effect = [b"stale", b""]
+    mock_reader._buffer = bytearray(b"stale")
     mock_reader.readline.return_value = b"OWON,SPE6103,12345,V1.0\r\n"
 
     mock_writer = MagicMock()
@@ -202,11 +201,9 @@ async def test_client_transport_lifecycle_and_queries() -> None:
         assert err_reply is None
         assert client.is_connected is False
 
-        # Reconnect method and close method
         await client.connect()
-        await client.reconnect()
-        assert client.is_connected is False
         await client.close()
+        assert client.is_connected is False
 
 
 async def test_client_connection_failure() -> None:
@@ -222,8 +219,7 @@ async def test_client_connection_failure() -> None:
 
 
 async def test_client_telemetry_and_controls() -> None:
-    # Test OWON composite telemetry poll
-    owon_client = ScpiPsuClient("socket://127.0.0.1:5025", profile_key="owon")
+    owon_client = ScpiPsuClient("socket://127.0.0.1:5025", initial_idn="OWON,SPE6103,1234,1.0")
     with patch.object(owon_client, "_query_unlocked", new_callable=AsyncMock) as mock_owon_q:
         mock_owon_q.return_value = "30.000, 2.500, 75.000, 0, 0, 0, 1"
         owon_snap = await owon_client.poll_telemetry()
@@ -231,8 +227,7 @@ async def test_client_telemetry_and_controls() -> None:
         assert owon_snap.voltage == 30.0
         assert owon_snap.status_text == "Constant Voltage (CV)"
 
-    # Test standard profile telemetry & fallback power calculation
-    client = ScpiPsuClient("socket://127.0.0.1:5025", profile_key="standard")
+    client = ScpiPsuClient("socket://127.0.0.1:5025")
     with patch.object(client, "_query_unlocked", new_callable=AsyncMock) as mock_q:
         # Valid V, I, and missing P (computes V*I)
         mock_q.side_effect = ["10.0", "2.5", None]
@@ -277,15 +272,19 @@ async def test_client_telemetry_and_controls() -> None:
         mock_q.side_effect = ["", "5.5"]
         assert await client.set_current_limit(5.5) == 5.5
 
-        # get_raw_idn, get_system_error, get_config_registers, clear_faults
+        # get_system_error, get_setpoints, get_config_registers, clear_faults
         mock_q.side_effect = None
-        mock_q.return_value = "Rigol,DP832,123,1.0"
-        assert await client.get_raw_idn() == "Rigol,DP832,123,1.0"
-
         mock_q.return_value = "0,No error"
         assert await client.get_system_error() == "0,No error"
         mock_q.return_value = "ON"
         assert await client.get_system_error() is None
+
+        mock_q.side_effect = ["12.0", "2.0"]
+        setpoints = await client.get_setpoints()
+        assert setpoints == {
+            "voltage_setpoint": 12.0,
+            "current_setpoint": 2.0,
+        }
 
         mock_q.side_effect = ["30.0", "5.0", "12.0", "2.0"]
         regs = await client.get_config_registers()

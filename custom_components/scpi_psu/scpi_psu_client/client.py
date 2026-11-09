@@ -8,7 +8,7 @@ from typing import Any
 
 from serialx import Parity, SerialException, StopBits, open_serial_connection
 
-from .dialects import PROFILES, OwonScpiProfile, StandardScpiProfile
+from .dialects import PROFILES, ScpiProfile, parse_output_state
 from .models import PsuIdentity, TelemetrySnapshot, parse_idn, parse_strict_float
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,15 +21,12 @@ class ScpiPsuClient:
         self,
         serial_url: str,
         baudrate: int = 115200,
-        profile_key: str = "auto",
         initial_idn: str | None = None,
         command_delay: float = 0.10,
         write_delay: float = 0.15,
     ) -> None:
-        """Initialize the SCPI client."""
         self.serial_url = serial_url
         self.baudrate = baudrate
-        self.configured_profile = profile_key
         self.identity: PsuIdentity = parse_idn(initial_idn)
         self.command_delay = command_delay
         self.write_delay = write_delay
@@ -41,28 +38,17 @@ class ScpiPsuClient:
 
     @property
     def is_connected(self) -> bool:
-        """Return True if transport connection is established."""
         return self._connected and self._writer is not None and not self._writer.is_closing()
 
     @property
-    def profile(self) -> OwonScpiProfile | StandardScpiProfile:
-        """Return the active SCPI profile."""
-        if self.configured_profile in PROFILES:
-            return PROFILES[self.configured_profile]
+    def profile(self) -> ScpiProfile:
         return PROFILES.get(self.identity.profile_key, PROFILES["standard"])
 
     async def connect(self) -> None:
-        """Connect to the serial transport."""
         async with self._lock:
             await self._ensure_connected_unlocked()
 
     async def close(self) -> None:
-        """Close connection cleanly."""
-        async with self._lock:
-            await self._close_transport_unlocked()
-
-    async def reconnect(self) -> None:
-        """Force transport disconnect to allow clean reconnection on next call."""
         async with self._lock:
             await self._close_transport_unlocked()
 
@@ -71,7 +57,7 @@ class ScpiPsuClient:
             try:
                 self._writer.close()
                 await asyncio.wait_for(self._writer.wait_closed(), timeout=1.5)
-            except Exception:
+            except OSError, SerialException, TimeoutError:
                 pass
             self._writer = None
             self._reader = None
@@ -153,51 +139,35 @@ class ScpiPsuClient:
             await self._close_transport_unlocked()
             return None
 
-    async def get_raw_idn(self) -> str | None:
-        """Query raw *IDN? string under lock."""
-        async with self._lock:
-            return await self._query_unlocked("*IDN?")
-
     async def probe_identity(self) -> PsuIdentity:
-        """Probe *IDN? identity under lock."""
         async with self._lock:
             raw_idn = await self._query_unlocked("*IDN?")
             self.identity = parse_idn(raw_idn)
             return self.identity
 
     async def select_channel(self, channel: int) -> bool:
-        """Select active channel for multi-channel instruments (INST:NSEL n or INST CHn)."""
         cmd = self.profile.format_select_channel(channel)
         async with self._lock:
             await self._query_unlocked(cmd, expect_reply=False)
             return True
 
-    async def get_dmm_reading(self) -> float | None:
-        """Query DMM scalar reading (:READ? on OWON SPM, MEAS:VOLT:DC? on Standard SCPI)."""
-        cmd = getattr(self.profile, "cmd_get_dmm_reading", ":READ?")
-        async with self._lock:
-            raw = await self._query_unlocked(cmd)
-            return parse_strict_float(raw)
-
     async def poll_telemetry(self, channel: int = 1) -> TelemetrySnapshot | None:
-        """Poll telemetry snapshot from the PSU, optionally for a specific channel."""
         async with self._lock:
             prof = self.profile
             if self.identity.channels > 1:
-                cmd_sel = prof.format_select_channel(channel)
-                await self._query_unlocked(cmd_sel, expect_reply=False)
+                await self._query_unlocked(prof.format_select_channel(channel), expect_reply=False)
 
-            if prof.key == "owon" and isinstance(prof, OwonScpiProfile):
-                meas_line = await self._query_unlocked("MEAS:ALL:INFO?")
-                snap = prof.parse_meas_all_info(meas_line)
+            if prof.cmd_get_composite_telemetry:
+                meas_line = await self._query_unlocked(prof.cmd_get_composite_telemetry)
+                snap = prof.parse_composite_telemetry(meas_line)
                 if snap is not None:
                     snap.channel = channel
                     if self.identity.has_dmm:
-                        dmm_raw = await self._query_unlocked(prof.cmd_get_dmm_reading)
-                        snap.dmm_reading = parse_strict_float(dmm_raw)
+                        snap.dmm_reading = parse_strict_float(
+                            await self._query_unlocked(prof.cmd_get_dmm_reading)
+                        )
                     return snap
 
-            # Standard IEEE 488.2 fallback
             v = parse_strict_float(await self._query_unlocked("MEAS:VOLT?"))
             if v is None or not (0.0 <= v <= 500.0):
                 return None
@@ -210,8 +180,7 @@ class ScpiPsuClient:
 
             dmm_val: float | None = None
             if self.identity.has_dmm:
-                cmd_dmm = getattr(prof, "cmd_get_dmm_reading", "MEAS:VOLT:DC?")
-                dmm_val = parse_strict_float(await self._query_unlocked(cmd_dmm))
+                dmm_val = parse_strict_float(await self._query_unlocked(prof.cmd_get_dmm_reading))
 
             return TelemetrySnapshot(
                 voltage=round(v, 3),
@@ -221,104 +190,98 @@ class ScpiPsuClient:
                 channel=channel,
             )
 
-    async def get_output(self) -> bool | None:
-        """Read output state (OUTP?)."""
+    async def _set_and_verify_float(self, set_cmd: str, get_cmd: str, fallback: float) -> float:
         async with self._lock:
-            outp = await self._query_unlocked("OUTP?")
-            if outp in ("ON", "1"):
-                return True
-            if outp in ("OFF", "0"):
-                return False
-            return None
+            await self._query_unlocked(set_cmd, expect_reply=False)
+            readback = parse_strict_float(await self._query_unlocked(get_cmd))
+            return readback if readback is not None else fallback
+
+    async def get_output(self) -> bool | None:
+        async with self._lock:
+            return parse_output_state(await self._query_unlocked("OUTP?"))
 
     async def set_output(self, enabled: bool) -> bool:
-        """Set output state (OUTP ON/OFF)."""
         cmd = self.profile.format_set_output(enabled)
         async with self._lock:
             await self._query_unlocked(cmd, expect_reply=False)
-            outp = await self._query_unlocked("OUTP?")
-            if outp in ("ON", "1"):
-                return True
-            if outp in ("OFF", "0"):
-                return False
-            return enabled
+            parsed = parse_output_state(await self._query_unlocked("OUTP?"))
+            return parsed if parsed is not None else enabled
 
-    async def set_voltage(self, value: float) -> float | None:
-        """Set output voltage setpoint."""
-        cmd = self.profile.format_set_voltage(value)
-        async with self._lock:
-            await self._query_unlocked(cmd, expect_reply=False)
-            v_set = parse_strict_float(
-                await self._query_unlocked(self.profile.cmd_get_voltage_setpoint)
-            )
-            return v_set if v_set is not None else value
+    async def set_voltage(self, value: float) -> float:
+        return await self._set_and_verify_float(
+            self.profile.format_set_voltage(value),
+            self.profile.cmd_get_voltage_setpoint,
+            value,
+        )
 
-    async def set_current(self, value: float) -> float | None:
-        """Set constant current limit/setpoint."""
-        cmd = self.profile.format_set_current(value)
-        async with self._lock:
-            await self._query_unlocked(cmd, expect_reply=False)
-            c_set = parse_strict_float(
-                await self._query_unlocked(self.profile.cmd_get_current_setpoint)
-            )
-            return c_set if c_set is not None else value
+    async def set_current(self, value: float) -> float:
+        return await self._set_and_verify_float(
+            self.profile.format_set_current(value),
+            self.profile.cmd_get_current_setpoint,
+            value,
+        )
 
-    async def set_voltage_limit(self, value: float) -> float | None:
-        """Set OVP trip limit."""
-        cmd = self.profile.format_set_voltage_limit(value)
-        async with self._lock:
-            await self._query_unlocked(cmd, expect_reply=False)
-            v_lim = parse_strict_float(
-                await self._query_unlocked(self.profile.cmd_get_voltage_limit)
-            )
-            return v_lim if v_lim is not None else value
+    async def set_voltage_limit(self, value: float) -> float:
+        return await self._set_and_verify_float(
+            self.profile.format_set_voltage_limit(value),
+            self.profile.cmd_get_voltage_limit,
+            value,
+        )
 
-    async def set_current_limit(self, value: float) -> float | None:
-        """Set OCP trip limit."""
-        cmd = self.profile.format_set_current_limit(value)
-        async with self._lock:
-            await self._query_unlocked(cmd, expect_reply=False)
-            c_lim = parse_strict_float(
-                await self._query_unlocked(self.profile.cmd_get_current_limit)
-            )
-            return c_lim if c_lim is not None else value
+    async def set_current_limit(self, value: float) -> float:
+        return await self._set_and_verify_float(
+            self.profile.format_set_current_limit(value),
+            self.profile.cmd_get_current_limit,
+            value,
+        )
 
     async def get_system_error(self) -> str | None:
-        """Query SYST:ERR? under lock."""
         async with self._lock:
             err = await self._query_unlocked("SYST:ERR?")
             if err and err not in ("ON", "OFF") and err.count(",") <= 1:
                 return err
             return None
 
-    async def get_config_registers(self) -> dict[str, float | None]:
-        """Query setpoints and limits under lock."""
+    async def _query_bounded_float_unlocked(self, cmd: str, max_val: float) -> float | None:
+        val = parse_strict_float(await self._query_unlocked(cmd))
+        return round(val, 3) if val is not None and 0.0 <= val <= max_val else None
+
+    async def get_setpoints(self) -> dict[str, float | None]:
         prof = self.profile
         max_v_hw = self.identity.hw_max_voltage * 1.15
         max_i_hw = self.identity.hw_max_current * 1.15
 
         async with self._lock:
-            v_lim = parse_strict_float(await self._query_unlocked(prof.cmd_get_voltage_limit))
-            c_lim = parse_strict_float(await self._query_unlocked(prof.cmd_get_current_limit))
-            v_set = parse_strict_float(await self._query_unlocked(prof.cmd_get_voltage_setpoint))
-            c_set = parse_strict_float(await self._query_unlocked(prof.cmd_get_current_setpoint))
+            return {
+                "voltage_setpoint": await self._query_bounded_float_unlocked(
+                    prof.cmd_get_voltage_setpoint, max_v_hw
+                ),
+                "current_setpoint": await self._query_bounded_float_unlocked(
+                    prof.cmd_get_current_setpoint, max_i_hw
+                ),
+            }
 
-        return {
-            "voltage_limit": round(v_lim, 3)
-            if v_lim is not None and 0.0 <= v_lim <= max_v_hw
-            else None,
-            "current_limit": round(c_lim, 3)
-            if c_lim is not None and 0.0 <= c_lim <= max_i_hw
-            else None,
-            "voltage_setpoint": round(v_set, 3)
-            if v_set is not None and 0.0 <= v_set <= max_v_hw
-            else None,
-            "current_setpoint": round(c_set, 3)
-            if c_set is not None and 0.0 <= c_set <= max_i_hw
-            else None,
-        }
+    async def get_config_registers(self) -> dict[str, float | None]:
+        prof = self.profile
+        max_v_hw = self.identity.hw_max_voltage * 1.15
+        max_i_hw = self.identity.hw_max_current * 1.15
+
+        async with self._lock:
+            return {
+                "voltage_limit": await self._query_bounded_float_unlocked(
+                    prof.cmd_get_voltage_limit, max_v_hw
+                ),
+                "current_limit": await self._query_bounded_float_unlocked(
+                    prof.cmd_get_current_limit, max_i_hw
+                ),
+                "voltage_setpoint": await self._query_bounded_float_unlocked(
+                    prof.cmd_get_voltage_setpoint, max_v_hw
+                ),
+                "current_setpoint": await self._query_bounded_float_unlocked(
+                    prof.cmd_get_current_setpoint, max_i_hw
+                ),
+            }
 
     async def clear_faults(self) -> None:
-        """Clear device protection errors (*CLS)."""
         async with self._lock:
             await self._query_unlocked("*CLS", expect_reply=False)

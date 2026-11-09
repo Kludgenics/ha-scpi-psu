@@ -95,7 +95,14 @@ async def async_setup_entry(
 ) -> None:
     """Set up SCPI PSU number entities."""
     coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(ScpiPsuNumber(coordinator, description) for description in NUMBERS)
+    entities: list[ScpiPsuNumber] = []
+    for description in NUMBERS:
+        if description.key == "overvoltage_limit" and coordinator.data.voltage_limit is None:
+            continue
+        if description.key == "overcurrent_limit" and coordinator.data.current_limit is None:
+            continue
+        entities.append(ScpiPsuNumber(coordinator, description))
+    async_add_entities(entities)
 
 
 class ScpiPsuNumber(CoordinatorEntity[ScpiPsuCoordinator], NumberEntity):
@@ -109,7 +116,6 @@ class ScpiPsuNumber(CoordinatorEntity[ScpiPsuCoordinator], NumberEntity):
         coordinator: ScpiPsuCoordinator,
         description: ScpiPsuNumberEntityDescription,
     ) -> None:
-        """Initialize the number entity."""
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
@@ -118,9 +124,7 @@ class ScpiPsuNumber(CoordinatorEntity[ScpiPsuCoordinator], NumberEntity):
 
     @property
     def native_value(self) -> float | None:
-        """Return current value."""
         return self.entity_description.value_fn(self.coordinator.data)
 
     async def async_set_native_value(self, value: float) -> None:
-        """Update the current value."""
         await self.entity_description.set_fn(self.coordinator, value)

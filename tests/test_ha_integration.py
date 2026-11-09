@@ -23,10 +23,9 @@ from custom_components.scpi_psu.const import (
     CONF_SCAN_INTERVAL,
     CONF_SERIAL_PORT,
     DOMAIN,
-    PROFILE_STANDARD,
 )
 from custom_components.scpi_psu.coordinator import ScpiPsuCoordinator
-from custom_components.scpi_psu.scpi_psu_client.models import TelemetrySnapshot
+from custom_components.scpi_psu.scpi_psu_client.models import TelemetrySnapshot, parse_idn
 
 
 @pytest.fixture
@@ -76,11 +75,6 @@ async def test_integration_setup_and_unload(
             "custom_components.scpi_psu.scpi_psu_client.client.ScpiPsuClient.get_output",
             new_callable=AsyncMock,
             return_value=True,
-        ),
-        patch(
-            "custom_components.scpi_psu.scpi_psu_client.client.ScpiPsuClient.get_raw_idn",
-            new_callable=AsyncMock,
-            return_value="OWON,SPE6103,1234,V1.0",
         ),
         patch(
             "custom_components.scpi_psu.scpi_psu_client.client.ScpiPsuClient.get_config_registers",
@@ -133,15 +127,9 @@ async def test_coordinator_update_and_unresponsive_recovery(
     mock_config_entry.add_to_hass(hass)
     coordinator = ScpiPsuCoordinator(hass, mock_config_entry)
 
-    # Check properties and safety clamps
     assert coordinator.effective_max_voltage == 24.0
     assert coordinator.effective_max_current == 5.0
     assert coordinator.profile.key == "owon"
-
-    # Explicit profile override
-    coordinator.configured_profile = PROFILE_STANDARD
-    assert coordinator.profile.key == "standard"
-    coordinator.configured_profile = "auto"
 
     snap = TelemetrySnapshot(
         voltage=12.5,
@@ -154,21 +142,24 @@ async def test_coordinator_update_and_unresponsive_recovery(
     with (
         patch.object(coordinator.client, "poll_telemetry", new_callable=AsyncMock) as mock_poll,
         patch.object(coordinator.client, "get_output", new_callable=AsyncMock) as mock_outp,
-        patch.object(coordinator.client, "get_raw_idn", new_callable=AsyncMock) as mock_idn,
         patch.object(
             coordinator.client, "get_config_registers", new_callable=AsyncMock
         ) as mock_regs,
+        patch.object(coordinator.client, "get_setpoints", new_callable=AsyncMock) as mock_setpoints,
         patch.object(coordinator.client, "get_system_error", new_callable=AsyncMock) as mock_err,
-        patch.object(coordinator.client, "reconnect", new_callable=AsyncMock) as mock_reconnect,
+        patch.object(coordinator.client, "close", new_callable=AsyncMock) as mock_close,
     ):
         mock_poll.return_value = snap
         mock_outp.return_value = True
-        mock_idn.return_value = "OWON,SPE6103,1234,V1.0"
         mock_regs.return_value = {
             "voltage_limit": 60.0,
             "current_limit": 10.0,
             "voltage_setpoint": 12.5,
             "current_setpoint": 1.2,
+        }
+        mock_setpoints.return_value = {
+            "voltage_setpoint": 13.0,
+            "current_setpoint": 1.5,
         }
         mock_err.return_value = "0,No error"
 
@@ -179,27 +170,30 @@ async def test_coordinator_update_and_unresponsive_recovery(
         assert data.power == 15.0
         assert data.output_enabled is True
         assert data.voltage_setpoint == 12.5
+        mock_outp.assert_not_awaited()
 
-        # Test standard profile status text update
-        coordinator.configured_profile = PROFILE_STANDARD
+        # Subsequent fast poll syncs setpoints without full config poll
+        coordinator.identity = parse_idn("Rigol Technologies,DP832,123,1.0")
+        snap_std = TelemetrySnapshot(voltage=12.5, current=1.2, power=15.0, output_enabled=None)
+        mock_poll.return_value = snap_std
         mock_outp.return_value = False
         data_std = await coordinator._async_update_data()
         assert data_std.status_text == "Standby / Output Off"
-        coordinator.configured_profile = "auto"
+        assert data_std.voltage_setpoint == 13.0
+        assert data_std.current_setpoint == 1.5
 
-        # Simulate 3 consecutive poll failures to trigger unresponsive state + reconnect
         mock_poll.return_value = None
         data1 = await coordinator._async_update_data()
-        assert data1.responding is True  # 1st failure tolerated
+        assert data1.responding is True
 
         data2 = await coordinator._async_update_data()
-        assert data2.responding is False  # 2nd failure marks unresponsive
+        assert data2.responding is False
         assert data2.voltage is None
         assert data2.status_text == "Unresponsive / Power Lost"
 
         data3 = await coordinator._async_update_data()
         assert data3.responding is False
-        mock_reconnect.assert_awaited_once()
+        mock_close.assert_awaited_once()
 
 
 async def test_coordinator_control_methods_and_clamps(
@@ -217,7 +211,6 @@ async def test_coordinator_control_methods_and_clamps(
     )
 
     with (
-        patch.object(coordinator, "async_set_updated_data"),
         patch.object(coordinator.client, "set_output", new_callable=AsyncMock, return_value=True),
         patch.object(
             coordinator.client, "poll_telemetry", new_callable=AsyncMock, return_value=snap
@@ -245,35 +238,35 @@ async def test_coordinator_control_methods_and_clamps(
         ),
     ):
         await coordinator.async_set_output(True)
-        assert coordinator._state.output_enabled is True
-        assert coordinator._state.voltage == 24.0
+        assert coordinator.data.output_enabled is True
+        assert coordinator.data.voltage == 24.0
 
         # Request 50V when clamp is 24V -> should clamp to 24.0
         await coordinator.async_set_voltage(50.0)
         mock_set_v.assert_awaited_once_with(24.0)
-        assert coordinator._state.voltage_setpoint == 24.0
+        assert coordinator.data.voltage_setpoint == 24.0
 
         # Request 10A when clamp is 5A -> should clamp to 5.0
         await coordinator.async_set_current(10.0)
         mock_set_i.assert_awaited_once_with(5.0)
-        assert coordinator._state.current_setpoint == 5.0
+        assert coordinator.data.current_setpoint == 5.0
 
         # Request 50V OVP limit when clamp is 24V -> should clamp to 24.0
         await coordinator.async_set_voltage_limit(50.0)
         mock_set_v_lim.assert_awaited_once_with(24.0)
-        assert coordinator._state.voltage_limit == 24.0
+        assert coordinator.data.voltage_limit == 24.0
 
         # Request 10A OCP limit when clamp is 5A -> should clamp to 5.0
         await coordinator.async_set_current_limit(10.0)
         mock_set_i_lim.assert_awaited_once_with(5.0)
-        assert coordinator._state.current_limit == 5.0
+        assert coordinator.data.current_limit == 5.0
 
         # Reset errors
         await coordinator.async_reset_errors()
         mock_clear_faults.assert_awaited_once()
-        assert coordinator._state.system_error == "0,No error"
+        assert coordinator.data.system_error == "0,No error"
 
     with patch.object(coordinator.client, "close", new_callable=AsyncMock) as mock_close:
         await coordinator.async_close()
         mock_close.assert_awaited_once()
-        assert coordinator._state.connected is False
+        assert coordinator.data.connected is False

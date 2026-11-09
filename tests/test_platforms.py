@@ -96,6 +96,19 @@ async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
     )
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
+    # Standard profile: only 'connected' is registered (status trip flags unsupported)
+    std_added: list[binary_sensor.ScpiPsuBinarySensor] = []
+    await binary_sensor.async_setup_entry(
+        hass, entry, MagicMock(side_effect=lambda ents: std_added.extend(ents))
+    )
+    assert len(std_added) == 1
+    assert std_added[0].entity_description.key == "connected"
+    assert std_added[0].is_on is True
+
+    # OWON profile: all 5 binary sensors registered
+    from custom_components.scpi_psu.scpi_psu_client.models import parse_idn
+
+    coordinator.identity = parse_idn("OWON,SPE6103,123,1.0")
     added: list[binary_sensor.ScpiPsuBinarySensor] = []
     await binary_sensor.async_setup_entry(
         hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
@@ -191,3 +204,20 @@ async def test_number_entities(hass: HomeAssistant) -> None:
     with patch.object(coordinator, "async_set_voltage", new_callable=AsyncMock) as mock_v:
         await num_map["voltage_setpoint"].async_set_native_value(12.0)
         mock_v.assert_awaited_once_with(12.0)
+
+    # When hardware does not report protection limits, only setpoints are registered
+    coordinator.data = ScpiPsuData(
+        voltage_setpoint=5.0,
+        current_setpoint=2.0,
+        voltage_limit=None,
+        current_limit=None,
+    )
+    partial_added: list[number.ScpiPsuNumber] = []
+    await number.async_setup_entry(
+        hass, entry, MagicMock(side_effect=lambda ents: partial_added.extend(ents))
+    )
+    assert len(partial_added) == 2
+    assert {e.entity_description.key for e in partial_added} == {
+        "voltage_setpoint",
+        "current_setpoint",
+    }

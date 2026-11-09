@@ -22,19 +22,42 @@ from .const import (
     CONF_MAX_CURRENT_CLAMP,
     CONF_MAX_VOLTAGE_CLAMP,
     CONF_NAME,
-    CONF_PROFILE,
     CONF_SCAN_INTERVAL,
     CONF_SERIAL_PORT,
     DEFAULT_BAUDRATE,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
-    PROFILE_AUTO,
-    PROFILE_OWON,
-    PROFILE_STANDARD,
 )
 from .scpi_psu_client import PsuIdentity, ScpiPsuClient
 
 _LOGGER = logging.getLogger(__name__)
+
+
+BAUDRATE_SELECTOR = selector.NumberSelector(
+    selector.NumberSelectorConfig(
+        min=1200, max=921600, step=1, mode=selector.NumberSelectorMode.BOX
+    )
+)
+
+VOLTAGE_CLAMP_SELECTOR = selector.NumberSelector(
+    selector.NumberSelectorConfig(
+        min=0.1,
+        max=300.0,
+        step=0.1,
+        unit_of_measurement="V",
+        mode=selector.NumberSelectorMode.BOX,
+    )
+)
+
+CURRENT_CLAMP_SELECTOR = selector.NumberSelector(
+    selector.NumberSelectorConfig(
+        min=0.01,
+        max=100.0,
+        step=0.01,
+        unit_of_measurement="A",
+        mode=selector.NumberSelectorMode.BOX,
+    )
+)
 
 
 async def _async_probe_psu(serial_url: str, baudrate: int) -> PsuIdentity:
@@ -97,11 +120,7 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = probatio.Schema(
             {
                 probatio.Required(CONF_SERIAL_PORT): selector.SerialPortSelector(),
-                probatio.Required(CONF_BAUDRATE, default=DEFAULT_BAUDRATE): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=1200, max=921600, step=1, mode=selector.NumberSelectorMode.BOX
-                    )
-                ),
+                probatio.Required(CONF_BAUDRATE, default=DEFAULT_BAUDRATE): BAUDRATE_SELECTOR,
             }
         )
 
@@ -125,7 +144,6 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_SERIAL_PORT: self._serial_url,
                 CONF_BAUDRATE: self._baudrate,
                 CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL,
-                CONF_PROFILE: user_input.get(CONF_PROFILE, PROFILE_AUTO),
                 CONF_IDN: self._identity.raw_idn,
             }
             if v_clamp is not None:
@@ -141,42 +159,8 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_NAME,
                     description={"suggested_value": self._identity.default_title},
                 ): selector.TextSelector(),
-                probatio.Required(CONF_PROFILE, default=PROFILE_AUTO): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=[
-                            selector.SelectOptionDict(
-                                value=PROFILE_AUTO, label="Auto-detect via *IDN?"
-                            ),
-                            selector.SelectOptionDict(
-                                value=PROFILE_OWON,
-                                label="OWON / Abestop / Kiprim (MEAS:ALL:INFO?, VOLT:LIM)",
-                            ),
-                            selector.SelectOptionDict(
-                                value=PROFILE_STANDARD,
-                                label="Standard IEEE 488.2 / SCPI (MEAS:VOLT?, VOLT:PROT)",
-                            ),
-                        ],
-                        mode=selector.SelectSelectorMode.DROPDOWN,
-                    )
-                ),
-                probatio.Optional(CONF_MAX_VOLTAGE_CLAMP): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=0.1,
-                        max=300.0,
-                        step=0.1,
-                        unit_of_measurement="V",
-                        mode=selector.NumberSelectorMode.BOX,
-                    )
-                ),
-                probatio.Optional(CONF_MAX_CURRENT_CLAMP): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=0.01,
-                        max=100.0,
-                        step=0.01,
-                        unit_of_measurement="A",
-                        mode=selector.NumberSelectorMode.BOX,
-                    )
-                ),
+                probatio.Optional(CONF_MAX_VOLTAGE_CLAMP): VOLTAGE_CLAMP_SELECTOR,
+                probatio.Optional(CONF_MAX_CURRENT_CLAMP): CURRENT_CLAMP_SELECTOR,
             }
         )
 
@@ -193,7 +177,6 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        """Get the options flow for this handler."""
         return ScpiPsuOptionsFlow(config_entry)
 
 
@@ -201,19 +184,18 @@ class ScpiPsuOptionsFlow(OptionsFlow):
     """Handle options for an SCPI Power Supply."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
-        """Initialize options flow."""
         self._entry = config_entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Manage options."""
         errors: dict[str, str] = {}
         current_cfg = {**self._entry.data, **self._entry.options}
         current_port = current_cfg.get(CONF_SERIAL_PORT, "")
+        current_baud = int(current_cfg.get(CONF_BAUDRATE, DEFAULT_BAUDRATE))
         if user_input is not None:
             serial_url = user_input[CONF_SERIAL_PORT].strip()
             baudrate = int(user_input[CONF_BAUDRATE])
             try:
-                if serial_url != current_port:
+                if serial_url != current_port or baudrate != current_baud:
                     await _async_probe_psu(serial_url, baudrate)
             except (OSError, SerialException, TimeoutError) as err:
                 _LOGGER.warning("Failed to probe SCPI PSU at %s: %s", serial_url, err)
@@ -223,7 +205,6 @@ class ScpiPsuOptionsFlow(OptionsFlow):
                     CONF_SERIAL_PORT: serial_url,
                     CONF_BAUDRATE: baudrate,
                     CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
-                    CONF_PROFILE: user_input.get(CONF_PROFILE, PROFILE_AUTO),
                     CONF_MAX_VOLTAGE_CLAMP: _clean_optional_float(
                         user_input.get(CONF_MAX_VOLTAGE_CLAMP)
                     ),
@@ -243,55 +224,15 @@ class ScpiPsuOptionsFlow(OptionsFlow):
             ): selector.SerialPortSelector(),
             probatio.Required(
                 CONF_BAUDRATE, default=int(cfg.get(CONF_BAUDRATE, DEFAULT_BAUDRATE))
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=1200, max=921600, step=1, mode=selector.NumberSelectorMode.BOX
-                )
-            ),
-            probatio.Required(
-                CONF_PROFILE, default=cfg.get(CONF_PROFILE, PROFILE_AUTO)
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        selector.SelectOptionDict(
-                            value=PROFILE_AUTO, label="Auto-detect via *IDN?"
-                        ),
-                        selector.SelectOptionDict(
-                            value=PROFILE_OWON,
-                            label="OWON / Abestop / Kiprim (MEAS:ALL:INFO?, VOLT:LIM)",
-                        ),
-                        selector.SelectOptionDict(
-                            value=PROFILE_STANDARD,
-                            label="Standard IEEE 488.2 / SCPI (MEAS:VOLT?, VOLT:PROT)",
-                        ),
-                    ],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
+            ): BAUDRATE_SELECTOR,
             probatio.Optional(
                 CONF_MAX_VOLTAGE_CLAMP,
                 description={"suggested_value": v_clamp_default},
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0.1,
-                    max=300.0,
-                    step=0.1,
-                    unit_of_measurement="V",
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            ),
+            ): VOLTAGE_CLAMP_SELECTOR,
             probatio.Optional(
                 CONF_MAX_CURRENT_CLAMP,
                 description={"suggested_value": i_clamp_default},
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0.01,
-                    max=100.0,
-                    step=0.01,
-                    unit_of_measurement="A",
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            ),
+            ): CURRENT_CLAMP_SELECTOR,
             probatio.Required(
                 CONF_SCAN_INTERVAL,
                 default=int(cfg.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),

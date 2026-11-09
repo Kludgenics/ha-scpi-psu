@@ -8,6 +8,18 @@ from typing import Protocol
 from .models import TelemetrySnapshot, parse_strict_float
 
 
+def parse_output_state(raw: str | None) -> bool | None:
+    """Parse SCPI output state ('ON', '1', 'OFF', '0')."""
+    if raw is None:
+        return None
+    token = raw.strip().upper()
+    if token in ("ON", "1"):
+        return True
+    if token in ("OFF", "0"):
+        return False
+    return None
+
+
 class ScpiProfile(Protocol):
     """Protocol for SCPI PSU dialect implementations."""
 
@@ -16,6 +28,9 @@ class ScpiProfile(Protocol):
     cmd_get_current_setpoint: str
     cmd_get_voltage_limit: str
     cmd_get_current_limit: str
+    cmd_get_dmm_reading: str
+    cmd_get_composite_telemetry: str | None
+    reports_status_in_telemetry: bool
 
     def format_set_voltage(self, value: float) -> str: ...
     def format_set_current(self, value: float) -> str: ...
@@ -23,17 +38,14 @@ class ScpiProfile(Protocol):
     def format_set_current_limit(self, value: float) -> str: ...
     def format_set_output(self, enabled: bool) -> str: ...
     def format_select_channel(self, channel: int) -> str: ...
+    def parse_composite_telemetry(self, line: str | None) -> TelemetrySnapshot | None: ...
 
 
-class OwonScpiProfile:
-    """OWON / Abestop / Kiprim SCPI dialect (MEAS:ALL:INFO?, VOLT:LIM, CURR:LIM)."""
+class BaseScpiProfile:
+    """Shared IEEE 488.2 / SCPI command formatting."""
 
-    key = "owon"
     cmd_get_voltage_setpoint = "VOLT?"
     cmd_get_current_setpoint = "CURR?"
-    cmd_get_voltage_limit = "VOLT:LIM?"
-    cmd_get_current_limit = "CURR:LIM?"
-    cmd_get_dmm_reading = ":READ?"
 
     @staticmethod
     def format_set_voltage(value: float) -> str:
@@ -44,6 +56,21 @@ class OwonScpiProfile:
         return f"CURR {value:.3f}"
 
     @staticmethod
+    def format_set_output(enabled: bool) -> str:
+        return "OUTP ON" if enabled else "OUTP OFF"
+
+
+class OwonScpiProfile(BaseScpiProfile):
+    """OWON / Abestop / Kiprim SCPI dialect (MEAS:ALL:INFO?, VOLT:LIM, CURR:LIM)."""
+
+    key = "owon"
+    cmd_get_voltage_limit = "VOLT:LIM?"
+    cmd_get_current_limit = "CURR:LIM?"
+    cmd_get_dmm_reading = ":READ?"
+    cmd_get_composite_telemetry: str | None = "MEAS:ALL:INFO?"
+    reports_status_in_telemetry = True
+
+    @staticmethod
     def format_set_voltage_limit(value: float) -> str:
         return f"VOLT:LIM {value:.3f}"
 
@@ -52,16 +79,11 @@ class OwonScpiProfile:
         return f"CURR:LIM {value:.3f}"
 
     @staticmethod
-    def format_set_output(enabled: bool) -> str:
-        return "OUTP ON" if enabled else "OUTP OFF"
-
-    @staticmethod
     def format_select_channel(channel: int) -> str:
         return f"INST CH{channel}"
 
     @staticmethod
-    def parse_meas_all_info(line: str | None) -> TelemetrySnapshot | None:
-        """Parse OWON composite MEAS:ALL:INFO? response."""
+    def parse_composite_telemetry(line: str | None) -> TelemetrySnapshot | None:
         if not line:
             return None
         tokens = [t.strip() for t in line.split(",")]
@@ -76,15 +98,11 @@ class OwonScpiProfile:
         if not (0.0 <= v <= 200.0 and 0.0 <= i <= 100.0 and 0.0 <= p <= 5000.0):
             return None
 
-        ovp_raw = tokens[3].upper()
-        ocp_raw = tokens[4].upper()
-        opp_raw = tokens[5].upper()
-        if ovp_raw not in ("ON", "OFF", "0", "1") or ocp_raw not in ("ON", "OFF", "0", "1"):
+        ovp = parse_output_state(tokens[3])
+        ocp = parse_output_state(tokens[4])
+        opp = parse_output_state(tokens[5])
+        if ovp is None or ocp is None:
             return None
-
-        ovp = ovp_raw in ("ON", "1")
-        ocp = ocp_raw in ("ON", "1")
-        opp = opp_raw in ("ON", "1")
 
         code: int | None = None
         if len(tokens) >= 7:
@@ -115,31 +133,25 @@ class OwonScpiProfile:
             power=round(p, 3),
             ovp_tripped=ovp,
             ocp_tripped=ocp,
-            opp_tripped=opp,
+            opp_tripped=bool(opp),
             status_code=code,
             status_text=status_text,
             fault_alarm=fault,
             output_enabled=outp,
         )
 
+    parse_meas_all_info = parse_composite_telemetry
 
-class StandardScpiProfile:
+
+class StandardScpiProfile(BaseScpiProfile):
     """Standard IEEE 488.2 / SCPI-1999 PSU dialect (MEAS:VOLT?, VOLT:PROT, CURR:PROT)."""
 
     key = "standard"
-    cmd_get_voltage_setpoint = "VOLT?"
-    cmd_get_current_setpoint = "CURR?"
     cmd_get_voltage_limit = "VOLT:PROT?"
     cmd_get_current_limit = "CURR:PROT?"
     cmd_get_dmm_reading = "MEAS:VOLT:DC?"
-
-    @staticmethod
-    def format_set_voltage(value: float) -> str:
-        return f"VOLT {value:.3f}"
-
-    @staticmethod
-    def format_set_current(value: float) -> str:
-        return f"CURR {value:.3f}"
+    cmd_get_composite_telemetry: str | None = None
+    reports_status_in_telemetry = False
 
     @staticmethod
     def format_set_voltage_limit(value: float) -> str:
@@ -150,12 +162,12 @@ class StandardScpiProfile:
         return f"CURR:PROT {value:.3f}"
 
     @staticmethod
-    def format_set_output(enabled: bool) -> str:
-        return "OUTP ON" if enabled else "OUTP OFF"
-
-    @staticmethod
     def format_select_channel(channel: int) -> str:
         return f"INST:NSEL {channel}"
+
+    @staticmethod
+    def parse_composite_telemetry(line: str | None) -> TelemetrySnapshot | None:
+        return None
 
 
 PROFILES: dict[str, OwonScpiProfile | StandardScpiProfile] = {

@@ -72,9 +72,15 @@ async def async_setup_entry(
 ) -> None:
     """Set up SCPI PSU binary sensors."""
     coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        ScpiPsuBinarySensor(coordinator, description) for description in BINARY_SENSORS
-    )
+    entities: list[ScpiPsuBinarySensor] = []
+    for description in BINARY_SENSORS:
+        if (
+            description.key in ("fault", "ovp_tripped", "ocp_tripped", "opp_tripped")
+            and not coordinator.profile.reports_status_in_telemetry
+        ):
+            continue
+        entities.append(ScpiPsuBinarySensor(coordinator, description))
+    async_add_entities(entities)
 
 
 class ScpiPsuBinarySensor(CoordinatorEntity[ScpiPsuCoordinator], BinarySensorEntity):
@@ -88,7 +94,6 @@ class ScpiPsuBinarySensor(CoordinatorEntity[ScpiPsuCoordinator], BinarySensorEnt
         coordinator: ScpiPsuCoordinator,
         description: ScpiPsuBinarySensorEntityDescription,
     ) -> None:
-        """Initialize the binary sensor."""
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
@@ -99,5 +104,4 @@ class ScpiPsuBinarySensor(CoordinatorEntity[ScpiPsuCoordinator], BinarySensorEnt
 
     @property
     def is_on(self) -> bool | None:
-        """Return true if the binary sensor is on."""
         return self.entity_description.value_fn(self.coordinator.data)

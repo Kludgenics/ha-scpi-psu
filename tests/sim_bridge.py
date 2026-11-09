@@ -70,17 +70,14 @@ class PyVisaSimTcpBridge:
                 else:
                     with contextlib.suppress(Exception):
                         self._inst.write(line)
-        except asyncio.CancelledError, ConnectionResetError, BrokenPipeError:
-            pass
-        except Exception:
+        except asyncio.CancelledError, ConnectionResetError, BrokenPipeError, OSError:
             pass
         finally:
             writer.close()
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(OSError):
                 await writer.wait_closed()
 
     async def stop(self) -> None:
-        """Stop TCP server and close visa resource."""
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()

@@ -32,7 +32,6 @@ class ScpiPsuSensorEntityDescription(SensorEntityDescription):
     """Describes SCPI PSU sensor entity."""
 
     value_fn: Callable[[ScpiPsuData], Any]
-    always_available: bool = False
 
 
 SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
@@ -67,7 +66,6 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         key="status",
         name="Status",
         icon="mdi:power-settings",
-        always_available=True,
         value_fn=lambda d: d.status_text,
     ),
     ScpiPsuSensorEntityDescription(
@@ -116,7 +114,6 @@ class ScpiPsuSensor(CoordinatorEntity[ScpiPsuCoordinator], SensorEntity):
         coordinator: ScpiPsuCoordinator,
         description: ScpiPsuSensorEntityDescription,
     ) -> None:
-        """Initialize the sensor."""
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
@@ -128,11 +125,5 @@ class ScpiPsuSensor(CoordinatorEntity[ScpiPsuCoordinator], SensorEntity):
             self._attr_device_info = coordinator.device_info
 
     @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return True
-
-    @property
     def native_value(self) -> Any:
-        """Return the state of the sensor."""
         return self.entity_description.value_fn(self.coordinator.data)
