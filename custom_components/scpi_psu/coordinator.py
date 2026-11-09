@@ -159,6 +159,19 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
 
     async def _async_update_data(self) -> ScpiPsuData:
         """Poll the PSU cleanly via ScpiPsuClient."""
+        now = time.monotonic()
+        if (
+            self.identity.profile_key == "standard"
+            and (self.configured_profile == PROFILE_AUTO or self.configured_profile not in PROFILES)
+            and (self._state.idn is None or "," not in self._state.idn)
+        ):
+            # Probe device identity first to ensure correct dialect profile is selected
+            raw_idn = await self.client.get_raw_idn()
+            if raw_idn and "," in raw_idn:
+                self._state.idn = raw_idn
+                self.identity = parse_idn(raw_idn)
+                self.client.identity = self.identity
+
         telemetry = await self.client.poll_telemetry()
         if telemetry is None:
             self._consecutive_failures += 1

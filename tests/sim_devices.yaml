@@ -1,0 +1,414 @@
+spec: "1.0"
+devices:
+  owon_spe6103:
+    eom:
+      ASRL INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP SOCKET:
+        q: "\n"
+        r: "\n"
+    error: ERROR
+    dialogues:
+      - q: "*IDN?"
+        r: "OWON,SPE6103,2138123,V1.2.3"
+      - q: "*CLS"
+      - q: "SYST:ERR?"
+        r: "0,No error"
+    properties:
+      voltage_setpoint:
+        default: 12.0
+        getter:
+          q: "VOLT?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT {:f}"
+        specs:
+          type: float
+      current_setpoint:
+        default: 2.0
+        getter:
+          q: "CURR?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR {:f}"
+        specs:
+          type: float
+      voltage_limit:
+        default: 60.0
+        getter:
+          q: "VOLT:LIM?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT:LIM {:f}"
+        specs:
+          type: float
+      current_limit:
+        default: 10.0
+        getter:
+          q: "CURR:LIM?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR:LIM {:f}"
+        specs:
+          type: float
+      output_state:
+        default: 1
+        getter:
+          q: "OUTP?"
+          r: "{:d}"
+        setter:
+          q: "OUTP {:s}"
+        specs:
+          type: int
+      telemetry:
+        default: "12.000, 2.000, 24.000, 0, 0, 0, 1"
+        getter:
+          q: "MEAS:ALL:INFO?"
+          r: "{:s}"
+        specs:
+          type: str
+
+  abestop_at6301:
+    eom:
+      ASRL INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP SOCKET:
+        q: "\n"
+        r: "\n"
+    error: ERROR
+    dialogues:
+      - q: "*IDN?"
+        r: "Abestop,AT6301,9876543,V2.0.1"
+      - q: "*CLS"
+      - q: "SYST:ERR?"
+        r: "0,No error"
+    properties:
+      voltage_setpoint:
+        default: 5.0
+        getter:
+          q: "VOLT?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT {:f}"
+        specs:
+          type: float
+      current_setpoint:
+        default: 3.0
+        getter:
+          q: "CURR?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR {:f}"
+        specs:
+          type: float
+      voltage_limit:
+        default: 60.0
+        getter:
+          q: "VOLT:LIM?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT:LIM {:f}"
+        specs:
+          type: float
+      current_limit:
+        default: 10.0
+        getter:
+          q: "CURR:LIM?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR:LIM {:f}"
+        specs:
+          type: float
+      output_state:
+        default: 1
+        getter:
+          q: "OUTP?"
+          r: "{:d}"
+        setter:
+          q: "OUTP {:s}"
+        specs:
+          type: int
+      telemetry:
+        default: "5.000, 1.200, 6.000, 0, 0, 0, 1"
+        getter:
+          q: "MEAS:ALL:INFO?"
+          r: "{:s}"
+        specs:
+          type: str
+
+  rigol_dp832:
+    eom:
+      ASRL INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP SOCKET:
+        q: "\n"
+        r: "\n"
+    error: ERROR
+    dialogues:
+      - q: "*IDN?"
+        r: "Rigol Technologies,DP832,DP8B1234567,00.01.14"
+      - q: "*CLS"
+      - q: "SYST:ERR?"
+        r: "0,No error"
+    properties:
+      voltage_meas:
+        default: 24.0
+        getter:
+          q: "MEAS:VOLT?"
+          r: "{:.3f}"
+        specs:
+          type: float
+      current_meas:
+        default: 1.5
+        getter:
+          q: "MEAS:CURR?"
+          r: "{:.3f}"
+        specs:
+          type: float
+      power_meas:
+        default: 36.0
+        getter:
+          q: "MEAS:POW?"
+          r: "{:.3f}"
+        specs:
+          type: float
+      voltage_setpoint:
+        default: 24.0
+        getter:
+          q: "VOLT?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT {:f}"
+        specs:
+          type: float
+      current_setpoint:
+        default: 3.0
+        getter:
+          q: "CURR?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR {:f}"
+        specs:
+          type: float
+      voltage_limit:
+        default: 30.0
+        getter:
+          q: "VOLT:PROT?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT:PROT {:f}"
+        specs:
+          type: float
+      current_limit:
+        default: 3.0
+        getter:
+          q: "CURR:PROT?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR:PROT {:f}"
+        specs:
+          type: float
+      output_state:
+        default: 1
+        getter:
+          q: "OUTP?"
+          r: "{:d}"
+        setter:
+          q: "OUTP {:s}"
+        specs:
+          type: int
+
+  siglent_spd3303x:
+    eom:
+      ASRL INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP SOCKET:
+        q: "\n"
+        r: "\n"
+    error: ERROR
+    dialogues:
+      - q: "*IDN?"
+        r: "Siglent Technologies,SPD3303X,SPD3X12345,1.01.01"
+      - q: "*CLS"
+      - q: "SYST:ERR?"
+        r: "0,No error"
+    properties:
+      voltage_meas:
+        default: 18.0
+        getter:
+          q: "MEAS:VOLT?"
+          r: "{:.3f}"
+        specs:
+          type: float
+      current_meas:
+        default: 2.0
+        getter:
+          q: "MEAS:CURR?"
+          r: "{:.3f}"
+        specs:
+          type: float
+      power_meas:
+        default: 36.0
+        getter:
+          q: "MEAS:POW?"
+          r: "{:.3f}"
+        specs:
+          type: float
+      voltage_setpoint:
+        default: 18.0
+        getter:
+          q: "VOLT?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT {:f}"
+        specs:
+          type: float
+      current_setpoint:
+        default: 3.2
+        getter:
+          q: "CURR?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR {:f}"
+        specs:
+          type: float
+      voltage_limit:
+        default: 32.0
+        getter:
+          q: "VOLT:PROT?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT:PROT {:f}"
+        specs:
+          type: float
+      current_limit:
+        default: 3.2
+        getter:
+          q: "CURR:PROT?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR:PROT {:f}"
+        specs:
+          type: float
+      output_state:
+        default: 1
+        getter:
+          q: "OUTP?"
+          r: "{:d}"
+        setter:
+          q: "OUTP {:s}"
+        specs:
+          type: int
+
+  keysight_e36311a:
+    eom:
+      ASRL INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP INSTR:
+        q: "\n"
+        r: "\n"
+      TCPIP SOCKET:
+        q: "\n"
+        r: "\n"
+    error: ERROR
+    dialogues:
+      - q: "*IDN?"
+        r: "Keysight Technologies,E36311A,MY12345678,1.0.0"
+      - q: "*CLS"
+      - q: "SYST:ERR?"
+        r: "0,No error"
+    properties:
+      voltage_meas:
+        default: 15.0
+        getter:
+          q: "MEAS:VOLT?"
+          r: "{:.3f}"
+        specs:
+          type: float
+      current_meas:
+        default: 1.0
+        getter:
+          q: "MEAS:CURR?"
+          r: "{:.3f}"
+        specs:
+          type: float
+      power_meas:
+        default: 15.0
+        getter:
+          q: "MEAS:POW?"
+          r: "{:.3f}"
+        specs:
+          type: float
+      voltage_setpoint:
+        default: 15.0
+        getter:
+          q: "VOLT?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT {:f}"
+        specs:
+          type: float
+      current_setpoint:
+        default: 5.0
+        getter:
+          q: "CURR?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR {:f}"
+        specs:
+          type: float
+      voltage_limit:
+        default: 25.0
+        getter:
+          q: "VOLT:PROT?"
+          r: "{:.3f}"
+        setter:
+          q: "VOLT:PROT {:f}"
+        specs:
+          type: float
+      current_limit:
+        default: 5.0
+        getter:
+          q: "CURR:PROT?"
+          r: "{:.3f}"
+        setter:
+          q: "CURR:PROT {:f}"
+        specs:
+          type: float
+      output_state:
+        default: 1
+        getter:
+          q: "OUTP?"
+          r: "{:d}"
+        setter:
+          q: "OUTP {:s}"
+        specs:
+          type: int
+resources:
+  ASRL1::INSTR:
+    device: owon_spe6103
+  ASRL2::INSTR:
+    device: abestop_at6301
+  ASRL3::INSTR:
+    device: rigol_dp832
+  ASRL4::INSTR:
+    device: siglent_spd3303x
+  ASRL5::INSTR:
+    device: keysight_e36311a

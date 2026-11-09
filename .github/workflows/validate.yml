@@ -31,7 +31,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system homeassistant pytest pytest-asyncio pytest-homeassistant-custom-component pyserial aiousbwatcher pytest-cov mypy bandit -e packages/scpi_psu_client
+          uv pip install --system homeassistant pytest pytest-asyncio pytest-homeassistant-custom-component pyserial aiousbwatcher pytest-cov mypy bandit pyvisa pyvisa-sim -e packages/scpi_psu_client
 
       - name: Run Ruff Linter
         run: uvx ruff check .
