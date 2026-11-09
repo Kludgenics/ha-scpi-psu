@@ -31,7 +31,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system homeassistant pytest pytest-asyncio pytest-homeassistant-custom-component pyserial aiousbwatcher pytest-cov -e packages/scpi_psu_client
+          uv pip install --system homeassistant pytest pytest-asyncio pytest-homeassistant-custom-component pyserial aiousbwatcher pytest-cov mypy bandit -e packages/scpi_psu_client
 
       - name: Run Ruff Linter
         run: uvx ruff check .
@@ -39,8 +39,14 @@ jobs:
       - name: Run Ruff Formatter Check
         run: uvx ruff format --check .
 
+      - name: Run Mypy Type Checker
+        run: mypy custom_components/scpi_psu tests
+
+      - name: Run Bandit Security Scanner
+        run: bandit -r custom_components/scpi_psu -s B101,B110
+
       - name: Run Pytest Suite with Coverage
-        run: pytest -v --cov=custom_components/scpi_psu --cov-report=term-missing
+        run: pytest -v --cov=custom_components/scpi_psu --cov-fail-under=65 --cov-report=term-missing
 
   hassfest:
     name: Hassfest Validation

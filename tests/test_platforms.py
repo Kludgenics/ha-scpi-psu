@@ -14,7 +14,7 @@ from custom_components.scpi_psu.sensor import SENSORS, ScpiPsuSensor
 from custom_components.scpi_psu.switch import ScpiPsuOutputSwitch
 
 
-async def test_sensor_entities(hass: HomeAssistant):
+async def test_sensor_entities(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Test PSU",
@@ -39,7 +39,7 @@ async def test_sensor_entities(hass: HomeAssistant):
     assert sensor_map["error_register"].native_value == "0,No error"
 
 
-async def test_binary_sensor_entities(hass: HomeAssistant):
+async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Test PSU",
@@ -63,7 +63,7 @@ async def test_binary_sensor_entities(hass: HomeAssistant):
     assert bin_map["ocp_tripped"].is_on is True
 
 
-async def test_switch_entity(hass: HomeAssistant):
+async def test_switch_entity(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Test PSU",
@@ -85,7 +85,7 @@ async def test_switch_entity(hass: HomeAssistant):
         mock_set.assert_awaited_with(True)
 
 
-async def test_button_entity(hass: HomeAssistant):
+async def test_button_entity(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Test PSU",
@@ -101,7 +101,7 @@ async def test_button_entity(hass: HomeAssistant):
         mock_reset.assert_awaited_once()
 
 
-async def test_number_entities(hass: HomeAssistant):
+async def test_number_entities(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Test PSU",

@@ -11,8 +11,31 @@ repos:
       - id: check-merge-conflict
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.10
+    rev: v0.17.4
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy type check
+        entry: .venv/bin/mypy custom_components/scpi_psu tests
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: bandit
+        name: bandit security scan
+        entry: uvx bandit -r custom_components/scpi_psu -s B101,B110
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: pytest
+        name: pytest unit tests & coverage
+        entry: .venv/bin/pytest tests --cov=custom_components/scpi_psu --cov-fail-under=65
+        language: system
+        types: [python]
+        pass_filenames: false

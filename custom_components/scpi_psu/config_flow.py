@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import voluptuous as vol
+import probatio
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -94,10 +94,10 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._abort_if_unique_id_configured()
                 return await self.async_step_confirm()
 
-        schema = vol.Schema(
+        schema = probatio.Schema(
             {
-                vol.Required(CONF_SERIAL_PORT): selector.SerialPortSelector(),
-                vol.Required(CONF_BAUDRATE, default=DEFAULT_BAUDRATE): selector.NumberSelector(
+                probatio.Required(CONF_SERIAL_PORT): selector.SerialPortSelector(),
+                probatio.Required(CONF_BAUDRATE, default=DEFAULT_BAUDRATE): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=1200, max=921600, step=1, mode=selector.NumberSelectorMode.BOX
                     )
@@ -135,13 +135,13 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
 
             return self.async_create_entry(title=title, data=data)
 
-        schema = vol.Schema(
+        schema = probatio.Schema(
             {
-                vol.Optional(
+                probatio.Optional(
                     CONF_NAME,
                     description={"suggested_value": self._identity.default_title},
                 ): selector.TextSelector(),
-                vol.Required(CONF_PROFILE, default=PROFILE_AUTO): selector.SelectSelector(
+                probatio.Required(CONF_PROFILE, default=PROFILE_AUTO): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=[
                             selector.SelectOptionDict(
@@ -159,7 +159,7 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
-                vol.Optional(CONF_MAX_VOLTAGE_CLAMP): selector.NumberSelector(
+                probatio.Optional(CONF_MAX_VOLTAGE_CLAMP): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=0.1,
                         max=300.0,
@@ -168,7 +168,7 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
                         mode=selector.NumberSelectorMode.BOX,
                     )
                 ),
-                vol.Optional(CONF_MAX_CURRENT_CLAMP): selector.NumberSelector(
+                probatio.Optional(CONF_MAX_CURRENT_CLAMP): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=0.01,
                         max=100.0,
@@ -238,17 +238,17 @@ class ScpiPsuOptionsFlow(OptionsFlow):
         i_clamp_default = cfg.get(CONF_MAX_CURRENT_CLAMP)
 
         schema_dict: dict[Any, Any] = {
-            vol.Required(
+            probatio.Required(
                 CONF_SERIAL_PORT, default=cfg.get(CONF_SERIAL_PORT, "")
             ): selector.SerialPortSelector(),
-            vol.Required(
+            probatio.Required(
                 CONF_BAUDRATE, default=int(cfg.get(CONF_BAUDRATE, DEFAULT_BAUDRATE))
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=1200, max=921600, step=1, mode=selector.NumberSelectorMode.BOX
                 )
             ),
-            vol.Required(
+            probatio.Required(
                 CONF_PROFILE, default=cfg.get(CONF_PROFILE, PROFILE_AUTO)
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
@@ -268,7 +268,7 @@ class ScpiPsuOptionsFlow(OptionsFlow):
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
-            vol.Optional(
+            probatio.Optional(
                 CONF_MAX_VOLTAGE_CLAMP,
                 description={"suggested_value": v_clamp_default},
             ): selector.NumberSelector(
@@ -280,7 +280,7 @@ class ScpiPsuOptionsFlow(OptionsFlow):
                     mode=selector.NumberSelectorMode.BOX,
                 )
             ),
-            vol.Optional(
+            probatio.Optional(
                 CONF_MAX_CURRENT_CLAMP,
                 description={"suggested_value": i_clamp_default},
             ): selector.NumberSelector(
@@ -292,7 +292,7 @@ class ScpiPsuOptionsFlow(OptionsFlow):
                     mode=selector.NumberSelectorMode.BOX,
                 )
             ),
-            vol.Required(
+            probatio.Required(
                 CONF_SCAN_INTERVAL,
                 default=int(cfg.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),
             ): selector.NumberSelector(
@@ -307,5 +307,5 @@ class ScpiPsuOptionsFlow(OptionsFlow):
         }
 
         return self.async_show_form(
-            step_id="init", data_schema=vol.Schema(schema_dict), errors=errors
+            step_id="init", data_schema=probatio.Schema(schema_dict), errors=errors
         )

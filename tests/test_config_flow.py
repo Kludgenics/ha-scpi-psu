@@ -15,7 +15,7 @@ from custom_components.scpi_psu.const import (
 from custom_components.scpi_psu.scpi_psu_client.models import PsuIdentity
 
 
-async def test_flow_user_step_success(hass: HomeAssistant):
+async def test_flow_user_step_success(hass: HomeAssistant) -> None:
     flow = ScpiPsuConfigFlow()
     flow.hass = hass
     flow.context = {}
@@ -51,7 +51,7 @@ async def test_flow_user_step_success(hass: HomeAssistant):
         assert result3["data"][CONF_SERIAL_PORT] == "socket://127.0.0.1:5025"
 
 
-async def test_options_flow(hass: HomeAssistant):
+async def test_options_flow(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Test PSU",

@@ -28,7 +28,7 @@ def mock_config_entry():
     )
 
 
-async def test_coordinator_update(hass: HomeAssistant, mock_config_entry: MockConfigEntry):
+async def test_coordinator_update(hass: HomeAssistant, mock_config_entry: MockConfigEntry) -> None:
     mock_config_entry.add_to_hass(hass)
     coordinator = ScpiPsuCoordinator(hass, mock_config_entry)
 

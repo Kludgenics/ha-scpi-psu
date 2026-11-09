@@ -30,6 +30,15 @@ ignore = [
     "E402",
 ]
 
+[tool.mypy]
+python_version = "3.14"
+explicit_package_bases = true
+ignore_missing_imports = true
+check_untyped_defs = true
+disallow_incomplete_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
