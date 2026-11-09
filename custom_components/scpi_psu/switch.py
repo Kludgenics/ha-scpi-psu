@@ -51,10 +51,10 @@ class ScpiPsuOutputSwitch(CoordinatorEntity[ScpiPsuCoordinator], SwitchEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self.coordinator.register_field_interest("output_enabled")
+        self.coordinator.register_field_interest("output_enabled", channel=1)
 
     async def async_will_remove_from_hass(self) -> None:
-        self.coordinator.unregister_field_interest("output_enabled")
+        self.coordinator.unregister_field_interest("output_enabled", channel=1)
         await super().async_will_remove_from_hass()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -85,10 +85,10 @@ class ScpiPsuChannelOutputSwitch(CoordinatorEntity[ScpiPsuCoordinator], SwitchEn
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self.coordinator.register_field_interest("output_enabled")
+        self.coordinator.register_field_interest("output_enabled", channel=self.channel)
 
     async def async_will_remove_from_hass(self) -> None:
-        self.coordinator.unregister_field_interest("output_enabled")
+        self.coordinator.unregister_field_interest("output_enabled", channel=self.channel)
         await super().async_will_remove_from_hass()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -112,6 +112,16 @@ class ScpiPsuMasterOutputSwitch(CoordinatorEntity[ScpiPsuCoordinator], SwitchEnt
     @property
     def is_on(self) -> bool | None:
         return self.coordinator.data.all_outputs_enabled
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        for ch in range(1, self.coordinator.identity.channels + 1):
+            self.coordinator.register_field_interest("output_enabled", channel=ch)
+
+    async def async_will_remove_from_hass(self) -> None:
+        for ch in range(1, self.coordinator.identity.channels + 1):
+            self.coordinator.unregister_field_interest("output_enabled", channel=ch)
+        await super().async_will_remove_from_hass()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self.coordinator.async_set_all_outputs(True)

@@ -201,9 +201,7 @@ class QueryPlanner:
 
         candidates.append(
             QueryDescriptor(
-                command=f"MEAS:VOLT? CH{channel}"
-                if (self.channels > 1 and channel > 1)
-                else "MEAS:VOLT?",
+                command="MEAS:VOLT?",
                 fields=frozenset({FIELD_VOLTAGE}),
                 channel=channel,
                 default_latency_ms=12.0,
@@ -218,9 +216,7 @@ class QueryPlanner:
 
         candidates.append(
             QueryDescriptor(
-                command=f"MEAS:CURR? CH{channel}"
-                if (self.channels > 1 and channel > 1)
-                else "MEAS:CURR?",
+                command="MEAS:CURR?",
                 fields=frozenset({FIELD_CURRENT}),
                 channel=channel,
                 default_latency_ms=12.0,
@@ -235,9 +231,7 @@ class QueryPlanner:
 
         candidates.append(
             QueryDescriptor(
-                command=f"MEAS:POW? CH{channel}"
-                if (self.channels > 1 and channel > 1)
-                else "MEAS:POW?",
+                command="MEAS:POW?",
                 fields=frozenset({FIELD_POWER}),
                 channel=channel,
                 default_latency_ms=12.0,
@@ -245,16 +239,26 @@ class QueryPlanner:
             )
         )
 
-        # Output state
+        # Output state (also synthesizes status_text for dialects without composite telemetry)
         def _parse_outp(raw: str | None) -> dict[str, Any]:
             st = parse_output_state(raw)
-            return {FIELD_OUTPUT_ENABLED: st} if st is not None else {}
+            if st is None:
+                return {}
+            res: dict[str, Any] = {FIELD_OUTPUT_ENABLED: st}
+            if not prof.reports_status_in_telemetry:
+                res[FIELD_STATUS_TEXT] = "Active" if st else "Standby / Output Off"
+            return res
 
+        outp_fields = (
+            frozenset({FIELD_OUTPUT_ENABLED})
+            if prof.reports_status_in_telemetry
+            else frozenset({FIELD_OUTPUT_ENABLED, FIELD_STATUS_TEXT})
+        )
         outp_cmd = prof.format_get_output(channel) if self.channels > 1 else "OUTP?"
         candidates.append(
             QueryDescriptor(
                 command=outp_cmd,
-                fields=frozenset({FIELD_OUTPUT_ENABLED}),
+                fields=outp_fields,
                 channel=channel,
                 default_latency_ms=10.0,
                 parser=_parse_outp,

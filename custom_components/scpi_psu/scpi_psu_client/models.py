@@ -48,15 +48,15 @@ class ChannelTelemetry:
 class TelemetrySnapshot:
     """Normalized telemetry returned by a profile poll."""
 
-    voltage: float
-    current: float
-    power: float
+    voltage: float | None = None
+    current: float | None = None
+    power: float | None = None
     ovp_tripped: bool | None = None
     ocp_tripped: bool | None = None
     opp_tripped: bool | None = None
     status_code: int | None = None
-    status_text: str = "Active"
-    fault_alarm: bool | None = False
+    status_text: str | None = None
+    fault_alarm: bool | None = None
     output_enabled: bool | None = None
     dmm_reading: float | None = None
     channel: int = 1

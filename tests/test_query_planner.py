@@ -99,3 +99,58 @@ def test_query_planner_dynamically_routes_around_slow_queries() -> None:
     assert "MEAS:ALL:INFO?" not in commands
     assert "MEAS:VOLT?" in commands
     assert "MEAS:CURR?" in commands
+
+
+async def test_partial_telemetry_and_channel_field_interest() -> None:
+    """Verify polling only a subset of fields (e.g. voltage disabled or channel 2 output only)."""
+    from unittest.mock import patch
+
+    from custom_components.scpi_psu.scpi_psu_client.client import ScpiPsuClient
+
+    client = ScpiPsuClient(
+        "socket://127.0.0.1:5025", initial_idn="Rigol Technologies,DP832,123,1.0"
+    )
+    queried_commands: list[str] = []
+
+    def _responder(cmd: str, expect_reply: bool = True) -> str | None:
+        queried_commands.append(cmd)
+        if not expect_reply:
+            return ""
+        if cmd == "MEAS:CURR?":
+            return "1.75"
+        if "OUTP?" in cmd:
+            return "ON"
+        return None
+
+    with patch.object(client, "_query_unlocked", side_effect=_responder):
+        # 1. Poll only current (voltage sensor disabled by user) -> succeeds with voltage=None
+        snap_curr = await client.poll_telemetry(channel=1, needed_fields={FIELD_CURRENT})
+        assert snap_curr is not None
+        assert snap_curr.current == 1.75
+        assert snap_curr.voltage is None
+        assert snap_curr.power is None
+        assert "MEAS:VOLT?" not in queried_commands
+        assert "OUTP?" not in queried_commands
+
+        # 2. Poll only status_text on Standard SCPI -> covered by OUTP? without needing voltage/current
+        queried_commands.clear()
+        snap_status = await client.poll_telemetry(channel=1, needed_fields={FIELD_STATUS_TEXT})
+        assert snap_status is not None
+        assert snap_status.output_enabled is True
+        assert snap_status.status_text == "Active"
+        assert "OUTP?" in queried_commands
+        assert "MEAS:VOLT?" not in queried_commands
+
+        # 3. Poll all channels with per-channel field map (CH1: current, CH2: output_enabled)
+        queried_commands.clear()
+        all_snaps = await client.poll_all_channels(
+            needed_fields_by_channel={
+                1: {FIELD_CURRENT},
+                2: {FIELD_OUTPUT_ENABLED},
+            }
+        )
+        assert all_snaps is not None
+        assert set(all_snaps.keys()) == {1, 2}
+        assert all_snaps[1].current == 1.75
+        assert all_snaps[2].output_enabled is True
+        assert all_snaps[2].voltage is None

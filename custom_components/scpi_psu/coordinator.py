@@ -125,27 +125,31 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             write_delay=write_delay,
         )
         self._state = ScpiPsuData(idn=initial_idn)
-        self._registered_fields: dict[str, int] = {}
+        self._registered_fields: dict[int, dict[str, int]] = {}
         self._last_full_poll: float = 0.0
         self._consecutive_failures: int = 0
 
-    def register_field_interest(self, field: str) -> None:
-        """Register entity interest in a measurement field."""
-        self._registered_fields[field] = self._registered_fields.get(field, 0) + 1
+    def register_field_interest(self, field: str, channel: int = 1) -> None:
+        """Register entity interest in a measurement field on a specific channel."""
+        ch_map = self._registered_fields.setdefault(channel, {})
+        ch_map[field] = ch_map.get(field, 0) + 1
 
-    def unregister_field_interest(self, field: str) -> None:
-        """Unregister entity interest in a measurement field."""
-        if field in self._registered_fields:
-            self._registered_fields[field] -= 1
-            if self._registered_fields[field] <= 0:
-                del self._registered_fields[field]
+    def unregister_field_interest(self, field: str, channel: int = 1) -> None:
+        """Unregister entity interest in a measurement field on a specific channel."""
+        ch_map = self._registered_fields.get(channel)
+        if ch_map and field in ch_map:
+            ch_map[field] -= 1
+            if ch_map[field] <= 0:
+                del ch_map[field]
+            if not ch_map:
+                del self._registered_fields[channel]
 
     @property
-    def active_fields(self) -> set[str]:
-        """Compute the union of fields actively needed by enabled entities."""
+    def active_fields_by_channel(self) -> dict[int, set[str]]:
+        """Compute the map of channels to actively needed measurement fields."""
         if self._registered_fields:
-            return set(self._registered_fields.keys())
-        fields = {
+            return {ch: set(f_map.keys()) for ch, f_map in self._registered_fields.items() if f_map}
+        ch1_fields = {
             FIELD_VOLTAGE,
             FIELD_CURRENT,
             FIELD_POWER,
@@ -157,8 +161,16 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             FIELD_OPP_TRIPPED,
         }
         if self.identity.has_dmm:
-            fields.add(FIELD_DMM)
-        return fields
+            ch1_fields.add(FIELD_DMM)
+        result: dict[int, set[str]] = {1: ch1_fields}
+        for ch in range(2, self.identity.channels + 1):
+            result[ch] = {FIELD_OUTPUT_ENABLED}
+        return result
+
+    @property
+    def active_fields(self) -> set[str]:
+        """Compute the union of fields actively needed on primary channel 1."""
+        return self.active_fields_by_channel.get(1, set())
 
     @property
     def identity(self) -> PsuIdentity:
@@ -230,8 +242,9 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             ident = await self.client.probe_identity()
             if ident.raw_idn:
                 self._state.idn = ident.raw_idn
-        needed = self.active_fields
-        all_telemetry = await self.client.poll_all_channels(needed_fields=needed)
+        all_telemetry = await self.client.poll_all_channels(
+            needed_fields_by_channel=self.active_fields_by_channel
+        )
         if all_telemetry is None:
             self._consecutive_failures += 1
             if self._consecutive_failures >= 2:
@@ -276,28 +289,45 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
     def _apply_telemetry(self, snap: TelemetrySnapshot) -> None:
         ch = snap.channel
         ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
-        ch_data.voltage = snap.voltage
-        ch_data.current = snap.current
-        ch_data.power = snap.power
-        ch_data.ovp_tripped = snap.ovp_tripped
-        ch_data.ocp_tripped = snap.ocp_tripped
-        ch_data.opp_tripped = snap.opp_tripped
-        ch_data.status_text = snap.status_text
-        ch_data.fault_alarm = snap.fault_alarm
+        if snap.voltage is not None:
+            ch_data.voltage = snap.voltage
+        if snap.current is not None:
+            ch_data.current = snap.current
+        if snap.power is not None:
+            ch_data.power = snap.power
+        if snap.ovp_tripped is not None:
+            ch_data.ovp_tripped = snap.ovp_tripped
+        if snap.ocp_tripped is not None:
+            ch_data.ocp_tripped = snap.ocp_tripped
+        if snap.opp_tripped is not None:
+            ch_data.opp_tripped = snap.opp_tripped
+        if snap.status_text is not None:
+            ch_data.status_text = snap.status_text
+        if snap.fault_alarm is not None:
+            ch_data.fault_alarm = snap.fault_alarm
         if snap.output_enabled is not None:
             ch_data.output_enabled = snap.output_enabled
 
         # Update root state (representing channel 1 / primary output)
         if ch == 1:
-            self._state.voltage = snap.voltage
-            self._state.current = snap.current
-            self._state.power = snap.power
-            self._state.ovp_tripped = snap.ovp_tripped
-            self._state.ocp_tripped = snap.ocp_tripped
-            self._state.opp_tripped = snap.opp_tripped
-            self._state.status_text = snap.status_text
-            self._state.fault_alarm = snap.fault_alarm
-            self._state.dmm_reading = snap.dmm_reading
+            if snap.voltage is not None:
+                self._state.voltage = snap.voltage
+            if snap.current is not None:
+                self._state.current = snap.current
+            if snap.power is not None:
+                self._state.power = snap.power
+            if snap.ovp_tripped is not None:
+                self._state.ovp_tripped = snap.ovp_tripped
+            if snap.ocp_tripped is not None:
+                self._state.ocp_tripped = snap.ocp_tripped
+            if snap.opp_tripped is not None:
+                self._state.opp_tripped = snap.opp_tripped
+            if snap.status_text is not None:
+                self._state.status_text = snap.status_text
+            if snap.fault_alarm is not None:
+                self._state.fault_alarm = snap.fault_alarm
+            if snap.dmm_reading is not None:
+                self._state.dmm_reading = snap.dmm_reading
             if snap.output_enabled is not None:
                 self._state.output_enabled = snap.output_enabled
 

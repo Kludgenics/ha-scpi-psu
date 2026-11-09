@@ -176,72 +176,96 @@ class ScpiPsuClient:
             await self._query_unlocked(cmd, expect_reply=False)
             return True
 
-    async def poll_telemetry(
+    async def _poll_channel_unlocked(
         self,
         channel: int = 1,
         needed_fields: set[str] | None = None,
     ) -> TelemetrySnapshot | None:
-        async with self._lock:
-            prof = self.profile
-            if self.identity.channels > 1:
-                await self._query_unlocked(prof.format_select_channel(channel), expect_reply=False)
-
-            fields = needed_fields or {
+        prof = self.profile
+        fields = (
+            needed_fields
+            if needed_fields is not None
+            else {
                 "voltage",
                 "current",
                 "power",
                 "output_enabled",
                 "status_text",
                 "fault_alarm",
+                "ovp_tripped",
+                "ocp_tripped",
+                "opp_tripped",
             }
-            if self.identity.has_dmm:
-                fields = fields | {"dmm_reading"}
+            | ({"dmm_reading"} if self.identity.has_dmm else set())
+        )
+        if not fields:
+            return None
 
-            plan = self.planner.plan_queries(fields, channel=channel)
-            if not plan:
-                return None
+        plan = self.planner.plan_queries(fields, channel=channel)
+        if not plan:
+            return None
 
-            results: dict[str, Any] = {}
-            for desc in plan:
-                raw = await self._query_unlocked(desc.command)
-                if desc.parser:
-                    parsed = desc.parser(raw)
-                    results.update(parsed)
+        if self.identity.channels > 1:
+            await self._query_unlocked(prof.format_select_channel(channel), expect_reply=False)
 
-            raw_v = results.get("voltage")
-            raw_i = results.get("current")
-            raw_p = results.get("power")
-            if raw_v is None or raw_i is None:
-                return None
+        results: dict[str, Any] = {}
+        for desc in plan:
+            raw = await self._query_unlocked(desc.command)
+            if desc.parser:
+                parsed = desc.parser(raw)
+                results.update(parsed)
 
-            val_v = float(raw_v)
-            val_i = float(raw_i)
-            val_p = float(raw_p) if raw_p is not None else round(val_v * val_i, 3)
+        if not results:
+            return None
 
-            outp = results.get("output_enabled")
-            if outp is None:
-                outp = await self._get_output_unlocked(channel=channel)
+        raw_v = results.get("voltage")
+        raw_i = results.get("current")
+        raw_p = results.get("power")
 
-            status = results.get("status_text")
-            if status is None or not self.profile.reports_status_in_telemetry:
-                if outp is not None:
-                    status = "Active" if outp else "Standby / Output Off"
-                else:
-                    status = "Active"
+        # Require requested primary measurements to succeed
+        if "voltage" in fields and raw_v is None:
+            return None
+        if "current" in fields and raw_i is None:
+            return None
 
-            return TelemetrySnapshot(
-                voltage=val_v,
-                current=val_i,
-                power=val_p,
-                output_enabled=outp,
-                status_text=str(status),
-                fault_alarm=results.get("fault_alarm"),
-                ovp_tripped=results.get("ovp_tripped"),
-                ocp_tripped=results.get("ocp_tripped"),
-                opp_tripped=results.get("opp_tripped"),
-                dmm_reading=results.get("dmm_reading"),
-                channel=channel,
-            )
+        val_v = float(raw_v) if raw_v is not None else None
+        val_i = float(raw_i) if raw_i is not None else None
+        if raw_p is not None:
+            val_p: float | None = float(raw_p)
+        elif val_v is not None and val_i is not None:
+            val_p = round(val_v * val_i, 3)
+        else:
+            val_p = None
+
+        outp = results.get("output_enabled")
+        if outp is None and "output_enabled" in fields and self.identity.channels > 1:
+            outp = await self._get_output_unlocked(channel=channel)
+
+        status = results.get("status_text")
+        if status is None and "status_text" in fields:
+            status = "Active" if outp is not False else "Standby / Output Off"
+
+        return TelemetrySnapshot(
+            voltage=val_v,
+            current=val_i,
+            power=val_p,
+            output_enabled=outp,
+            status_text=str(status) if status is not None else None,
+            fault_alarm=results.get("fault_alarm"),
+            ovp_tripped=results.get("ovp_tripped"),
+            ocp_tripped=results.get("ocp_tripped"),
+            opp_tripped=results.get("opp_tripped"),
+            dmm_reading=results.get("dmm_reading"),
+            channel=channel,
+        )
+
+    async def poll_telemetry(
+        self,
+        channel: int = 1,
+        needed_fields: set[str] | None = None,
+    ) -> TelemetrySnapshot | None:
+        async with self._lock:
+            return await self._poll_channel_unlocked(channel=channel, needed_fields=needed_fields)
 
     async def _get_output_unlocked(self, channel: int = 1) -> bool | None:
         if self.identity.channels > 1:
@@ -257,27 +281,23 @@ class ScpiPsuClient:
         return parse_output_state(await self._query_unlocked("OUTP?"))
 
     async def poll_all_channels(
-        self, needed_fields: set[str] | None = None
+        self,
+        needed_fields_by_channel: dict[int, set[str]] | None = None,
     ) -> dict[int, TelemetrySnapshot] | None:
         """Poll telemetry across all configured channels."""
-        channels_to_poll = range(1, max(1, self.identity.channels) + 1)
+        total_ch = max(1, self.identity.channels)
         results: dict[int, TelemetrySnapshot] = {}
-        for ch in channels_to_poll:
-            snap = await self.poll_telemetry(channel=ch, needed_fields=needed_fields)
+        for ch in range(1, total_ch + 1):
+            if needed_fields_by_channel is not None:
+                ch_fields = needed_fields_by_channel.get(ch)
+                if not ch_fields:
+                    continue
+            else:
+                ch_fields = None if ch == 1 else {"output_enabled"}
+            snap = await self.poll_telemetry(channel=ch, needed_fields=ch_fields)
             if snap is None:
-                # If primary channel fails, instrument is unresponsive
                 if ch == 1:
                     return None
-                # If channel telemetry query fails, fallback to querying channel output state
-                ch_outp = await self.get_output(channel=ch)
-                if ch_outp is not None:
-                    results[ch] = TelemetrySnapshot(
-                        voltage=0.0,
-                        current=0.0,
-                        power=0.0,
-                        output_enabled=ch_outp,
-                        channel=ch,
-                    )
                 continue
             results[ch] = snap
         return results if results else None
