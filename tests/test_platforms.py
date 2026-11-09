@@ -18,6 +18,7 @@ from custom_components.scpi_psu.binary_sensor import BINARY_SENSORS
 from custom_components.scpi_psu.const import CONF_SERIAL_PORT, DOMAIN
 from custom_components.scpi_psu.coordinator import ScpiPsuCoordinator, ScpiPsuData
 from custom_components.scpi_psu.number import NUMBERS
+from custom_components.scpi_psu.scpi_psu_client import ChannelTelemetry
 
 
 async def test_sensor_entities(hass: HomeAssistant) -> None:
@@ -148,6 +149,68 @@ async def test_switch_entity(hass: HomeAssistant) -> None:
 
         await sw.async_turn_on()
         mock_set.assert_awaited_with(True)
+
+
+async def test_multichannel_switch_entities(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Rigol DP832",
+        data={CONF_SERIAL_PORT: "socket://127.0.0.1:5025"},
+        entry_id="test_multi_switch_entry",
+    )
+    entry.add_to_hass(hass)
+    coordinator = ScpiPsuCoordinator(hass, entry)
+    coordinator.identity = coordinator.identity.__class__(
+        manufacturer="RIGOL",
+        model="DP832",
+        serial_number="DP80000001",
+        firmware="00.01.16",
+        raw_idn="RIGOL TECHNOLOGIES,DP832,DP80000001,00.01.16",
+        profile_key="standard",
+        hw_max_voltage=30.0,
+        hw_max_current=3.0,
+        channels=3,
+    )
+    coordinator.data = ScpiPsuData(
+        output_enabled=True,
+        all_outputs_enabled=False,
+        channels={
+            1: ChannelTelemetry(channel=1, output_enabled=True),
+            2: ChannelTelemetry(channel=2, output_enabled=False),
+            3: ChannelTelemetry(channel=3),
+        },
+    )
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+
+    added: list[switch.SwitchEntity] = []
+    await switch.async_setup_entry(
+        hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
+    )
+    assert len(added) == 4
+    master_sw = added[0]
+    ch1_sw = added[1]
+    ch2_sw = added[2]
+    ch3_sw = added[3]
+
+    assert isinstance(master_sw, switch.ScpiPsuMasterOutputSwitch)
+    assert master_sw.is_on is False
+
+    assert isinstance(ch1_sw, switch.ScpiPsuChannelOutputSwitch)
+    assert ch1_sw.is_on is True
+    assert ch2_sw.is_on is False
+    assert ch3_sw.is_on is None
+
+    with patch.object(coordinator, "async_set_all_outputs", new_callable=AsyncMock) as mock_set_all:
+        await master_sw.async_turn_on()
+        mock_set_all.assert_awaited_once_with(True)
+        await master_sw.async_turn_off()
+        mock_set_all.assert_awaited_with(False)
+
+    with patch.object(coordinator, "async_set_output", new_callable=AsyncMock) as mock_set_ch:
+        await ch2_sw.async_turn_on()
+        mock_set_ch.assert_awaited_once_with(True, channel=2)
+        await ch2_sw.async_turn_off()
+        mock_set_ch.assert_awaited_with(False, channel=2)
 
 
 async def test_button_entity(hass: HomeAssistant) -> None:

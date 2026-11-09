@@ -200,16 +200,52 @@ class ScpiPsuClient:
             readback = parse_strict_float(await self._query_unlocked(get_cmd))
             return readback if readback is not None else fallback
 
-    async def get_output(self) -> bool | None:
+    async def get_output(self, channel: int = 1) -> bool | None:
         async with self._lock:
+            if self.identity.channels > 1:
+                # First try channel-parameterized query
+                cmd = self.profile.format_get_output(channel)
+                raw = await self._query_unlocked(cmd)
+                parsed = parse_output_state(raw)
+                if parsed is not None:
+                    return parsed
+                # Fallback: select channel then query OUTP?
+                await self._query_unlocked(
+                    self.profile.format_select_channel(channel), expect_reply=False
+                )
             return parse_output_state(await self._query_unlocked("OUTP?"))
 
-    async def set_output(self, enabled: bool) -> bool:
-        cmd = self.profile.format_set_output(enabled)
+    async def set_output(self, enabled: bool, channel: int = 1) -> bool:
         async with self._lock:
-            await self._query_unlocked(cmd, expect_reply=False)
+            if self.identity.channels > 1:
+                cmd = self.profile.format_set_output(enabled, channel)
+                await self._query_unlocked(cmd, expect_reply=False)
+                # Verify readback
+                get_cmd = self.profile.format_get_output(channel)
+                parsed = parse_output_state(await self._query_unlocked(get_cmd))
+                if parsed is not None:
+                    return parsed
+                await self._query_unlocked(
+                    self.profile.format_select_channel(channel), expect_reply=False
+                )
+            else:
+                cmd = self.profile.format_set_output(enabled)
+                await self._query_unlocked(cmd, expect_reply=False)
+
             parsed = parse_output_state(await self._query_unlocked("OUTP?"))
             return parsed if parsed is not None else enabled
+
+    async def set_all_outputs(self, enabled: bool) -> bool:
+        """Atomically set all outputs on a multi-channel power supply."""
+        async with self._lock:
+            # Try atomic broadcast command OUTP:ALL
+            cmd = self.profile.format_set_all_outputs(enabled)
+            await self._query_unlocked(cmd, expect_reply=False)
+            for ch in range(1, self.identity.channels + 1):
+                # Ensure each channel state matches
+                ch_cmd = self.profile.format_set_output(enabled, ch)
+                await self._query_unlocked(ch_cmd, expect_reply=False)
+            return enabled
 
     async def set_voltage(self, value: float) -> float:
         return await self._set_and_verify_float(

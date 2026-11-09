@@ -94,40 +94,42 @@ def test_owon_profile_commands_and_parsing() -> None:
     assert profile.format_set_output(False) == "OUTP OFF"
 
     # Valid status codes: 0 (Standby), 1 (CV), 2 (CC), 3 (Fault), 99 (Other/Active)
-    snap0 = profile.parse_meas_all_info("0.000, 0.000, 0.000, OFF, OFF, OFF, 0")
+    snap0 = profile.parse_composite_telemetry("0.000, 0.000, 0.000, OFF, OFF, OFF, 0")
     assert snap0 is not None
     assert snap0.status_text == "Standby / Output Off"
     assert snap0.output_enabled is False
     assert snap0.fault_alarm is False
 
-    snap1 = profile.parse_meas_all_info("12.000, 1.500, 18.000, 0, 0, 0, 1")
+    snap1 = profile.parse_composite_telemetry("12.000, 1.500, 18.000, 0, 0, 0, 1")
     assert snap1 is not None
     assert snap1.status_text == "Constant Voltage (CV)"
     assert snap1.output_enabled is True
 
-    snap2 = profile.parse_meas_all_info("5.000, 2.000, 10.000, 0, 0, 0, 2")
+    snap2 = profile.parse_composite_telemetry("5.000, 2.000, 10.000, 0, 0, 0, 2")
     assert snap2 is not None
     assert snap2.status_text == "Constant Current (CC)"
     assert snap2.output_enabled is True
 
-    snap3 = profile.parse_meas_all_info("0.000, 0.000, 0.000, ON, 0, 0, 3")
+    snap3 = profile.parse_composite_telemetry("0.000, 0.000, 0.000, ON, 0, 0, 3")
     assert snap3 is not None
     assert snap3.status_text == "Fault / Protection Trip"
     assert snap3.ovp_tripped is True
     assert snap3.fault_alarm is True
     assert snap3.output_enabled is None
 
-    snap_other = profile.parse_meas_all_info("5.000, 1.000, 5.000, 0, 0, 0, 9")
+    snap_other = profile.parse_composite_telemetry("5.000, 1.000, 5.000, 0, 0, 0, 9")
     assert snap_other is not None
     assert snap_other.status_text == "Active"
 
     # Invalid cases
-    assert profile.parse_meas_all_info(None) is None
-    assert profile.parse_meas_all_info("") is None
-    assert profile.parse_meas_all_info("12.0, 1.0, 12.0") is None  # Too few tokens
-    assert profile.parse_meas_all_info("bad, 1.0, 12.0, 0, 0, 0") is None  # Non-float
-    assert profile.parse_meas_all_info("999.0, 1.0, 12.0, 0, 0, 0") is None  # Out of range V
-    assert profile.parse_meas_all_info("12.0, 1.0, 12.0, BAD_FLAG, 0, 0") is None  # Bad OVP flag
+    assert profile.parse_composite_telemetry(None) is None
+    assert profile.parse_composite_telemetry("") is None
+    assert profile.parse_composite_telemetry("12.0, 1.0, 12.0") is None  # Too few tokens
+    assert profile.parse_composite_telemetry("bad, 1.0, 12.0, 0, 0, 0") is None  # Non-float
+    assert profile.parse_composite_telemetry("999.0, 1.0, 12.0, 0, 0, 0") is None  # Out of range V
+    assert (
+        profile.parse_composite_telemetry("12.0, 1.0, 12.0, BAD_FLAG, 0, 0") is None
+    )  # Bad OVP flag
 
 
 def test_standard_profile_commands() -> None:

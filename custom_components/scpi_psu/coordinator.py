@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
@@ -26,6 +26,7 @@ from .const import (
     PROFILE_AUTO,
 )
 from .scpi_psu_client import (
+    ChannelTelemetry,
     PsuIdentity,
     ScpiProfile,
     ScpiPsuClient,
@@ -50,6 +51,7 @@ class ScpiPsuData:
     status_text: str = "Unresponsive / Power Lost"
     fault_alarm: bool | None = None
     output_enabled: bool | None = None
+    all_outputs_enabled: bool | None = None
     voltage_setpoint: float | None = None
     current_setpoint: float | None = None
     voltage_limit: float | None = None
@@ -57,6 +59,7 @@ class ScpiPsuData:
     idn: str | None = None
     system_error: str | None = None
     dmm_reading: float | None = None
+    channels: dict[int, ChannelTelemetry] = field(default_factory=dict)
 
 
 class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
@@ -210,11 +213,28 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         self._apply_telemetry(telemetry)
 
         if telemetry.output_enabled is None:
-            outp = await self.client.get_output()
+            outp = await self.client.get_output(channel=1)
             if outp is not None:
                 self._state.output_enabled = outp
+                ch1_data = self._state.channels.setdefault(1, ChannelTelemetry(channel=1))
+                ch1_data.output_enabled = outp
                 if not self.profile.reports_status_in_telemetry:
                     self._state.status_text = "Active" if outp else "Standby / Output Off"
+
+        # Poll outputs for remaining channels if multi-channel
+        if self.identity.channels > 1:
+            for ch in range(2, self.identity.channels + 1):
+                ch_outp = await self.client.get_output(channel=ch)
+                if ch_outp is not None:
+                    ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
+                    ch_data.output_enabled = ch_outp
+
+            active_states = [
+                c.output_enabled
+                for c in self._state.channels.values()
+                if c.output_enabled is not None
+            ]
+            self._state.all_outputs_enabled = any(active_states) if active_states else None
 
         now = time.monotonic()
         if now - self._last_full_poll >= 60.0 or self._state.voltage_setpoint is None:
@@ -235,17 +255,41 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         return self._state
 
     def _apply_telemetry(self, snap: TelemetrySnapshot) -> None:
-        self._state.voltage = snap.voltage
-        self._state.current = snap.current
-        self._state.power = snap.power
-        self._state.ovp_tripped = snap.ovp_tripped
-        self._state.ocp_tripped = snap.ocp_tripped
-        self._state.opp_tripped = snap.opp_tripped
-        self._state.status_text = snap.status_text
-        self._state.fault_alarm = snap.fault_alarm
-        self._state.dmm_reading = snap.dmm_reading
+        ch = snap.channel
+        ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
+        ch_data.voltage = snap.voltage
+        ch_data.current = snap.current
+        ch_data.power = snap.power
+        ch_data.ovp_tripped = snap.ovp_tripped
+        ch_data.ocp_tripped = snap.ocp_tripped
+        ch_data.opp_tripped = snap.opp_tripped
+        ch_data.status_text = snap.status_text
+        ch_data.fault_alarm = snap.fault_alarm
         if snap.output_enabled is not None:
-            self._state.output_enabled = snap.output_enabled
+            ch_data.output_enabled = snap.output_enabled
+
+        # Update root state (representing channel 1 / primary output)
+        if ch == 1:
+            self._state.voltage = snap.voltage
+            self._state.current = snap.current
+            self._state.power = snap.power
+            self._state.ovp_tripped = snap.ovp_tripped
+            self._state.ocp_tripped = snap.ocp_tripped
+            self._state.opp_tripped = snap.opp_tripped
+            self._state.status_text = snap.status_text
+            self._state.fault_alarm = snap.fault_alarm
+            self._state.dmm_reading = snap.dmm_reading
+            if snap.output_enabled is not None:
+                self._state.output_enabled = snap.output_enabled
+
+        # Update all_outputs_enabled summary
+        if self._state.channels:
+            active_states = [
+                c.output_enabled
+                for c in self._state.channels.values()
+                if c.output_enabled is not None
+            ]
+            self._state.all_outputs_enabled = any(active_states) if active_states else None
 
     def _clamp_value(self, value: float, ceiling: float, label: str, unit: str) -> float:
         if value > ceiling:
@@ -262,12 +306,37 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             value = ceiling
         return max(0.0, value)
 
-    async def async_set_output(self, enabled: bool) -> None:
-        actual = await self.client.set_output(enabled)
-        snap = await self.client.poll_telemetry()
+    async def async_set_output(self, enabled: bool, channel: int = 1) -> None:
+        actual = await self.client.set_output(enabled, channel=channel)
+        ch_data = self._state.channels.setdefault(channel, ChannelTelemetry(channel=channel))
+        ch_data.output_enabled = actual
+        if channel == 1:
+            self._state.output_enabled = actual
+        active_states = [
+            c.output_enabled for c in self._state.channels.values() if c.output_enabled is not None
+        ]
+        self._state.all_outputs_enabled = any(active_states) if active_states else actual
+        snap = await self.client.poll_telemetry(channel=channel)
+        if snap is not None:
+            self._apply_telemetry(snap)
+        ch_data.output_enabled = actual
+        if channel == 1:
+            self._state.output_enabled = actual
+        self.async_set_updated_data(self._state)
+
+    async def async_set_all_outputs(self, enabled: bool) -> None:
+        """Atomically toggle all channel outputs on a multi-channel device."""
+        actual = await self.client.set_all_outputs(enabled)
+        for ch in range(1, self.identity.channels + 1):
+            ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
+            ch_data.output_enabled = actual
+        self._state.output_enabled = actual
+        self._state.all_outputs_enabled = actual
+        snap = await self.client.poll_telemetry(channel=1)
         if snap is not None:
             self._apply_telemetry(snap)
         self._state.output_enabled = actual
+        self._state.all_outputs_enabled = actual
         self.async_set_updated_data(self._state)
 
     async def async_set_voltage(self, value: float) -> None:

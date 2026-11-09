@@ -326,25 +326,52 @@ async def test_ha_integration_compatibility_matrix(
             )
             assert len(buttons) == 1
 
-            switches: list[switch.ScpiPsuOutputSwitch] = []
+            switches: list[switch.SwitchEntity] = []
             await switch.async_setup_entry(
                 hass, entry, MagicMock(side_effect=lambda ents: switches.extend(ents))
             )
-            assert len(switches) == 1
-            assert switches[0].is_on is True
+            if expected_channels > 1:
+                # 1 master switch + N channel switches
+                assert len(switches) == 1 + expected_channels
+                master_sw = switches[0]
+                ch_switches = switches[1:]
+                assert len(ch_switches) == expected_channels
+                for s in switches:
+                    assert s.is_on is True
+            else:
+                assert len(switches) == 1
+                assert switches[0].is_on is True
 
             # Verify child device hierarchy mapping
             parent_id = coordinator.parent_device_id
             assert parent_id is not None
             if expected_channels > 1:
-                sw_info = switches[0].device_info
-                assert sw_info is not None
-                assert isinstance(sw_info, dict)
-                assert sw_info.get("parent_device_id") == parent_id
-                assert (DOMAIN, f"{entry.entry_id}_ch1") in sw_info.get("identifiers", set())
-                for s in sensors:
-                    if s.entity_description.key in ("voltage", "current", "power", "status"):
-                        s_info = s.device_info
+                # Master switch is attached to parent chassis device
+                master_sw = switches[0]
+                master_info = master_sw.device_info
+                assert master_info is not None
+                assert isinstance(master_info, dict)
+                assert master_info.get("parent_device_id") is None
+                assert (DOMAIN, entry.entry_id) in master_info.get("identifiers", set())
+
+                # Channel switches are attached to their respective channel child devices
+                for ch_idx, s in enumerate(switches[1:], start=1):
+                    sw_info = s.device_info
+                    assert sw_info is not None
+                    assert isinstance(sw_info, dict)
+                    assert sw_info.get("parent_device_id") == parent_id
+                    assert (DOMAIN, f"{entry.entry_id}_ch{ch_idx}") in sw_info.get(
+                        "identifiers", set()
+                    )
+
+                for sensor_ent in sensors:
+                    if sensor_ent.entity_description.key in (
+                        "voltage",
+                        "current",
+                        "power",
+                        "status",
+                    ):
+                        s_info = sensor_ent.device_info
                         assert s_info is not None
                         assert isinstance(s_info, dict)
                         assert s_info.get("parent_device_id") == parent_id
@@ -364,10 +391,25 @@ async def test_ha_integration_compatibility_matrix(
                 assert (DOMAIN, f"{entry.entry_id}_dmm") in dmm_info.get("identifiers", set())
 
             # Exercise coordinator actions (turn off output, change voltage setpoint)
-            await switches[0].async_turn_off()
-            assert switches[0].is_on is False
-            await switches[0].async_turn_on()
-            assert switches[0].is_on is True
+            if expected_channels > 1:
+                # Test individual channel toggle
+                ch2_switch = switches[2]  # Channel 2 switch
+                await ch2_switch.async_turn_off()
+                assert ch2_switch.is_on is False
+                await ch2_switch.async_turn_on()
+                assert ch2_switch.is_on is True
+
+                # Test whole-device master toggle
+                master_sw = switches[0]
+                await master_sw.async_turn_off()
+                assert master_sw.is_on is False
+                await master_sw.async_turn_on()
+                assert master_sw.is_on is True
+            else:
+                await switches[0].async_turn_off()
+                assert switches[0].is_on is False
+                await switches[0].async_turn_on()
+                assert switches[0].is_on is True
 
             volt_num = next(n for n in numbers if n.entity_description.key == "voltage_setpoint")
             new_v = round(min(max_v * 0.4, 10.0), 2)

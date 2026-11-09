@@ -36,7 +36,9 @@ class ScpiProfile(Protocol):
     def format_set_current(self, value: float) -> str: ...
     def format_set_voltage_limit(self, value: float) -> str: ...
     def format_set_current_limit(self, value: float) -> str: ...
-    def format_set_output(self, enabled: bool) -> str: ...
+    def format_set_output(self, enabled: bool, channel: int | None = None) -> str: ...
+    def format_set_all_outputs(self, enabled: bool) -> str: ...
+    def format_get_output(self, channel: int | None = None) -> str: ...
     def format_select_channel(self, channel: int) -> str: ...
     def parse_composite_telemetry(self, line: str | None) -> TelemetrySnapshot | None: ...
 
@@ -56,8 +58,22 @@ class BaseScpiProfile:
         return f"CURR {value:.3f}"
 
     @staticmethod
-    def format_set_output(enabled: bool) -> str:
-        return "OUTP ON" if enabled else "OUTP OFF"
+    def format_set_output(enabled: bool, channel: int | None = None) -> str:
+        state = "ON" if enabled else "OFF"
+        if channel is not None and channel > 1:
+            return f"OUTP CH{channel},{state}"
+        return f"OUTP {state}"
+
+    @staticmethod
+    def format_set_all_outputs(enabled: bool) -> str:
+        state = "ON" if enabled else "OFF"
+        return f"OUTP:ALL {state}"
+
+    @staticmethod
+    def format_get_output(channel: int | None = None) -> str:
+        if channel is not None and channel > 1:
+            return f"OUTP? CH{channel}"
+        return "OUTP?"
 
 
 class OwonScpiProfile(BaseScpiProfile):
@@ -69,6 +85,11 @@ class OwonScpiProfile(BaseScpiProfile):
     cmd_get_dmm_reading = ":READ?"
     cmd_get_composite_telemetry: str | None = "MEAS:ALL:INFO?"
     reports_status_in_telemetry = True
+
+    @staticmethod
+    def format_set_all_outputs(enabled: bool) -> str:
+        state = "ON" if enabled else "OFF"
+        return f"OUTP:ALL {state}"
 
     @staticmethod
     def format_set_voltage_limit(value: float) -> str:
@@ -139,8 +160,6 @@ class OwonScpiProfile(BaseScpiProfile):
             fault_alarm=fault,
             output_enabled=outp,
         )
-
-    parse_meas_all_info = parse_composite_telemetry
 
 
 class StandardScpiProfile(BaseScpiProfile):

@@ -65,6 +65,56 @@ devices:
         specs:
           type: str
           valid: ["ON", "OFF", "0", "1"]
+      output_state_all:
+        default: "ON"
+        getter:
+          q: "OUTP:ALL?"
+          r: "{:s}"
+        setter:
+          q: "OUTP:ALL {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch1:
+        default: "ON"
+        getter:
+          q: "OUTP? CH1"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH1,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch2:
+        default: "ON"
+        getter:
+          q: "OUTP? CH2"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH2,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch3:
+        default: "ON"
+        getter:
+          q: "OUTP? CH3"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH3,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch4:
+        default: "ON"
+        getter:
+          q: "OUTP? CH4"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH4,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
       telemetry:
         default: "12.000, 2.000, 24.000, 0, 0, 0, 1"
         getter:
@@ -135,6 +185,56 @@ devices:
           r: "{:s}"
         setter:
           q: "OUTP {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_all:
+        default: "ON"
+        getter:
+          q: "OUTP:ALL?"
+          r: "{:s}"
+        setter:
+          q: "OUTP:ALL {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch1:
+        default: "ON"
+        getter:
+          q: "OUTP? CH1"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH1,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch2:
+        default: "ON"
+        getter:
+          q: "OUTP? CH2"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH2,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch3:
+        default: "ON"
+        getter:
+          q: "OUTP? CH3"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH3,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch4:
+        default: "ON"
+        getter:
+          q: "OUTP? CH4"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH4,{:s}"
         specs:
           type: str
           valid: ["ON", "OFF", "0", "1"]
@@ -210,6 +310,56 @@ devices:
           r: "{:s}"
         setter:
           q: "OUTP {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_all:
+        default: "ON"
+        getter:
+          q: "OUTP:ALL?"
+          r: "{:s}"
+        setter:
+          q: "OUTP:ALL {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch1:
+        default: "ON"
+        getter:
+          q: "OUTP? CH1"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH1,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch2:
+        default: "ON"
+        getter:
+          q: "OUTP? CH2"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH2,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch3:
+        default: "ON"
+        getter:
+          q: "OUTP? CH3"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH3,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch4:
+        default: "ON"
+        getter:
+          q: "OUTP? CH4"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH4,{:s}"
         specs:
           type: str
           valid: ["ON", "OFF", "0", "1"]
@@ -310,6 +460,56 @@ devices:
         specs:
           type: str
           valid: ["ON", "OFF", "0", "1"]
+      output_state_all:
+        default: "ON"
+        getter:
+          q: "OUTP:ALL?"
+          r: "{:s}"
+        setter:
+          q: "OUTP:ALL {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch1:
+        default: "ON"
+        getter:
+          q: "OUTP? CH1"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH1,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch2:
+        default: "ON"
+        getter:
+          q: "OUTP? CH2"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH2,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch3:
+        default: "ON"
+        getter:
+          q: "OUTP? CH3"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH3,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch4:
+        default: "ON"
+        getter:
+          q: "OUTP? CH4"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH4,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
 
   siglent_spd3303x:
     eom:
@@ -397,6 +597,56 @@ devices:
           r: "{:s}"
         setter:
           q: "OUTP {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_all:
+        default: "ON"
+        getter:
+          q: "OUTP:ALL?"
+          r: "{:s}"
+        setter:
+          q: "OUTP:ALL {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch1:
+        default: "ON"
+        getter:
+          q: "OUTP? CH1"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH1,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch2:
+        default: "ON"
+        getter:
+          q: "OUTP? CH2"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH2,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch3:
+        default: "ON"
+        getter:
+          q: "OUTP? CH3"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH3,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch4:
+        default: "ON"
+        getter:
+          q: "OUTP? CH4"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH4,{:s}"
         specs:
           type: str
           valid: ["ON", "OFF", "0", "1"]
@@ -492,6 +742,56 @@ devices:
         specs:
           type: str
           valid: ["ON", "OFF", "0", "1"]
+      output_state_all:
+        default: "ON"
+        getter:
+          q: "OUTP:ALL?"
+          r: "{:s}"
+        setter:
+          q: "OUTP:ALL {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch1:
+        default: "ON"
+        getter:
+          q: "OUTP? CH1"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH1,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch2:
+        default: "ON"
+        getter:
+          q: "OUTP? CH2"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH2,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch3:
+        default: "ON"
+        getter:
+          q: "OUTP? CH3"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH3,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch4:
+        default: "ON"
+        getter:
+          q: "OUTP? CH4"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH4,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
 
   rohde_schwarz_hmp4040:
     eom:
@@ -580,6 +880,56 @@ devices:
           r: "{:s}"
         setter:
           q: "OUTP {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_all:
+        default: "ON"
+        getter:
+          q: "OUTP:ALL?"
+          r: "{:s}"
+        setter:
+          q: "OUTP:ALL {:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch1:
+        default: "ON"
+        getter:
+          q: "OUTP? CH1"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH1,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch2:
+        default: "ON"
+        getter:
+          q: "OUTP? CH2"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH2,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch3:
+        default: "ON"
+        getter:
+          q: "OUTP? CH3"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH3,{:s}"
+        specs:
+          type: str
+          valid: ["ON", "OFF", "0", "1"]
+      output_state_ch4:
+        default: "ON"
+        getter:
+          q: "OUTP? CH4"
+          r: "{:s}"
+        setter:
+          q: "OUTP CH4,{:s}"
         specs:
           type: str
           valid: ["ON", "OFF", "0", "1"]
