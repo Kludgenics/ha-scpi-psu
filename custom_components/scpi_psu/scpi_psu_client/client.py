@@ -158,11 +158,15 @@ class ScpiPsuClient:
             await self._close_transport_unlocked()
             return None
 
+    def set_identity(self, identity: PsuIdentity) -> None:
+        """Update client identity and reconfigure query planner capabilities."""
+        self.identity = identity
+        self.planner = QueryPlanner(self.profile, self.identity.channels, self.identity.has_dmm)
+
     async def probe_identity(self) -> PsuIdentity:
         async with self._lock:
             raw_idn = await self._query_unlocked("*IDN?")
-            self.identity = parse_idn(raw_idn)
-            self.planner = QueryPlanner(self.profile, self.identity.channels, self.identity.has_dmm)
+            self.set_identity(parse_idn(raw_idn))
             return self.identity
 
     async def select_channel(self, channel: int) -> bool:
@@ -220,6 +224,9 @@ class ScpiPsuClient:
                 output_enabled=results.get("output_enabled"),
                 status_text=str(results.get("status_text", "Active")),
                 fault_alarm=results.get("fault_alarm"),
+                ovp_tripped=results.get("ovp_tripped"),
+                ocp_tripped=results.get("ocp_tripped"),
+                opp_tripped=results.get("opp_tripped"),
                 dmm_reading=results.get("dmm_reading"),
                 channel=channel,
             )

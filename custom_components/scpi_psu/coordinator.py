@@ -24,8 +24,20 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     PROFILE_AUTO,
+    channel_identifier,
+    dmm_identifier,
 )
 from .scpi_psu_client import (
+    FIELD_CURRENT,
+    FIELD_DMM,
+    FIELD_FAULT_ALARM,
+    FIELD_OCP_TRIPPED,
+    FIELD_OPP_TRIPPED,
+    FIELD_OUTPUT_ENABLED,
+    FIELD_OVP_TRIPPED,
+    FIELD_POWER,
+    FIELD_STATUS_TEXT,
+    FIELD_VOLTAGE,
     ChannelTelemetry,
     PsuIdentity,
     ScpiProfile,
@@ -114,15 +126,18 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         )
         self._state = ScpiPsuData(idn=initial_idn)
         self._active_fields: set[str] = {
-            "voltage",
-            "current",
-            "power",
-            "output_enabled",
-            "status_text",
-            "fault_alarm",
+            FIELD_VOLTAGE,
+            FIELD_CURRENT,
+            FIELD_POWER,
+            FIELD_OUTPUT_ENABLED,
+            FIELD_STATUS_TEXT,
+            FIELD_FAULT_ALARM,
+            FIELD_OVP_TRIPPED,
+            FIELD_OCP_TRIPPED,
+            FIELD_OPP_TRIPPED,
         }
         if self.identity.has_dmm:
-            self._active_fields.add("dmm_reading")
+            self._active_fields.add(FIELD_DMM)
         self._last_full_poll: float = 0.0
         self._consecutive_failures: int = 0
 
@@ -132,7 +147,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
 
     @identity.setter
     def identity(self, value: PsuIdentity) -> None:
-        self.client.identity = value
+        self.client.set_identity(value)
 
     @property
     def profile(self) -> ScpiProfile:
@@ -167,7 +182,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         if self.identity.channels <= 1 or self.parent_device_id is None:
             return self.device_info
         return ChildDeviceInfo(
-            identifiers={(DOMAIN, f"{self.entry.entry_id}_ch{channel}")},
+            identifiers={(DOMAIN, channel_identifier(self.entry.entry_id, channel))},
             name=f"{self.entry.title or self.identity.default_title} Channel {channel}",
             parent_device_id=self.parent_device_id,
         )
@@ -177,7 +192,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         if self.parent_device_id is None:
             return self.device_info
         return ChildDeviceInfo(
-            identifiers={(DOMAIN, f"{self.entry.entry_id}_dmm")},
+            identifiers={(DOMAIN, dmm_identifier(self.entry.entry_id))},
             name=f"{self.entry.title or self.identity.default_title} Multimeter",
             parent_device_id=self.parent_device_id,
         )
@@ -201,7 +216,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             if ident.raw_idn:
                 self._state.idn = ident.raw_idn
             if self.identity.has_dmm:
-                self._active_fields.add("dmm_reading")
+                self._active_fields.add(FIELD_DMM)
 
         telemetry = await self.client.poll_telemetry(channel=1, needed_fields=self._active_fields)
         if telemetry is None:

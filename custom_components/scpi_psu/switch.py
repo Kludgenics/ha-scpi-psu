@@ -73,8 +73,6 @@ class ScpiPsuChannelOutputSwitch(CoordinatorEntity[ScpiPsuCoordinator], SwitchEn
         ch_data = self.coordinator.data.channels.get(self.channel)
         if ch_data is not None and ch_data.output_enabled is not None:
             return ch_data.output_enabled
-        if self.channel == 1:
-            return self.coordinator.data.output_enabled
         return None
 
     async def async_turn_on(self, **kwargs: Any) -> None:

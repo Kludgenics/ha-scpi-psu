@@ -241,9 +241,18 @@ async def test_client_telemetry_and_controls() -> None:
         assert owon_snap.status_text == "Constant Voltage (CV)"
 
     client = ScpiPsuClient("socket://127.0.0.1:5025")
-    with patch.object(client, "_query_unlocked", new_callable=AsyncMock) as mock_q:
-        # OUTP?, MEAS:VOLT?, MEAS:CURR?, MEAS:POW?
-        mock_q.side_effect = ["ON", "10.0", "2.5", "25.0"]
+
+    # Command-driven responder avoiding sequential order assumptions
+    def _std_responses(cmd: str, expect_reply: bool = True) -> str | None:
+        table = {
+            "OUTP?": "ON",
+            "MEAS:VOLT?": "10.0",
+            "MEAS:CURR?": "2.5",
+            "MEAS:POW?": "25.0",
+        }
+        return table.get(cmd)
+
+    with patch.object(client, "_query_unlocked", side_effect=_std_responses):
         snap = await client.poll_telemetry()
         assert snap is not None
         assert snap.voltage == 10.0
@@ -251,14 +260,23 @@ async def test_client_telemetry_and_controls() -> None:
         assert snap.power == 25.0
         assert snap.output_enabled is True
 
-        # Invalid V returns None
-        mock_q.side_effect = ["ON", None, "2.5", "25.0"]
+    # Invalid V returns None
+    with patch.object(
+        client, "_query_unlocked", side_effect=lambda cmd, **kw: "ON" if "OUTP" in cmd else None
+    ):
         assert await client.poll_telemetry() is None
 
-        # Invalid I returns None
-        mock_q.side_effect = ["ON", "10.0", "999.0", "25.0"]
+    # Invalid I returns None
+    with patch.object(
+        client,
+        "_query_unlocked",
+        side_effect=lambda cmd, **kw: (
+            "999.0" if "CURR" in cmd else ("10.0" if "VOLT" in cmd else "ON")
+        ),
+    ):
         assert await client.poll_telemetry() is None
 
+    with patch.object(client, "_query_unlocked", new_callable=AsyncMock) as mock_q:
         # Output state queries
         mock_q.side_effect = None
         mock_q.return_value = "1"

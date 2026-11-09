@@ -17,3 +17,13 @@ DEFAULT_SCAN_INTERVAL = 2
 PROFILE_AUTO = "auto"
 PROFILE_OWON = "owon"
 PROFILE_STANDARD = "standard"
+
+
+def channel_identifier(entry_id: str, channel: int) -> str:
+    """Format child device identifier for a specific channel."""
+    return f"{entry_id}_ch{channel}"
+
+
+def dmm_identifier(entry_id: str) -> str:
+    """Format child device identifier for the built-in multimeter."""
+    return f"{entry_id}_dmm"

@@ -20,6 +20,9 @@ FIELD_POWER = "power"
 FIELD_OUTPUT_ENABLED = "output_enabled"
 FIELD_STATUS_TEXT = "status_text"
 FIELD_FAULT_ALARM = "fault_alarm"
+FIELD_OVP_TRIPPED = "ovp_tripped"
+FIELD_OCP_TRIPPED = "ocp_tripped"
+FIELD_OPP_TRIPPED = "opp_tripped"
 FIELD_DMM = "dmm_reading"
 FIELD_VOLTAGE_SETPOINT = "voltage_setpoint"
 FIELD_CURRENT_SETPOINT = "current_setpoint"
@@ -168,6 +171,9 @@ class QueryPlanner:
                     FIELD_STATUS_TEXT: snap.status_text,
                     FIELD_FAULT_ALARM: snap.fault_alarm,
                     FIELD_OUTPUT_ENABLED: snap.output_enabled,
+                    FIELD_OVP_TRIPPED: snap.ovp_tripped,
+                    FIELD_OCP_TRIPPED: snap.ocp_tripped,
+                    FIELD_OPP_TRIPPED: snap.opp_tripped,
                 }
 
             candidates.append(
@@ -181,6 +187,9 @@ class QueryPlanner:
                             FIELD_STATUS_TEXT,
                             FIELD_FAULT_ALARM,
                             FIELD_OUTPUT_ENABLED,
+                            FIELD_OVP_TRIPPED,
+                            FIELD_OCP_TRIPPED,
+                            FIELD_OPP_TRIPPED,
                         }
                     ),
                     channel=channel,
