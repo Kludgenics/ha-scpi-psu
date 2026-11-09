@@ -218,12 +218,23 @@ class ScpiPsuClient:
             val_i = float(raw_i)
             val_p = float(raw_p) if raw_p is not None else round(val_v * val_i, 3)
 
+            outp = results.get("output_enabled")
+            if outp is None:
+                outp = await self._get_output_unlocked(channel=channel)
+
+            status = results.get("status_text")
+            if status is None or not self.profile.reports_status_in_telemetry:
+                if outp is not None:
+                    status = "Active" if outp else "Standby / Output Off"
+                else:
+                    status = "Active"
+
             return TelemetrySnapshot(
                 voltage=val_v,
                 current=val_i,
                 power=val_p,
-                output_enabled=results.get("output_enabled"),
-                status_text=str(results.get("status_text", "Active")),
+                output_enabled=outp,
+                status_text=str(status),
                 fault_alarm=results.get("fault_alarm"),
                 ovp_tripped=results.get("ovp_tripped"),
                 ocp_tripped=results.get("ocp_tripped"),
@@ -231,6 +242,45 @@ class ScpiPsuClient:
                 dmm_reading=results.get("dmm_reading"),
                 channel=channel,
             )
+
+    async def _get_output_unlocked(self, channel: int = 1) -> bool | None:
+        if self.identity.channels > 1:
+            cmd = self.profile.format_get_output(channel)
+            raw = await self._query_unlocked(cmd)
+            parsed = parse_output_state(raw)
+            if parsed is not None:
+                return parsed
+            if channel > 1:
+                await self._query_unlocked(
+                    self.profile.format_select_channel(channel), expect_reply=False
+                )
+        return parse_output_state(await self._query_unlocked("OUTP?"))
+
+    async def poll_all_channels(
+        self, needed_fields: set[str] | None = None
+    ) -> dict[int, TelemetrySnapshot] | None:
+        """Poll telemetry across all configured channels."""
+        channels_to_poll = range(1, max(1, self.identity.channels) + 1)
+        results: dict[int, TelemetrySnapshot] = {}
+        for ch in channels_to_poll:
+            snap = await self.poll_telemetry(channel=ch, needed_fields=needed_fields)
+            if snap is None:
+                # If primary channel fails, instrument is unresponsive
+                if ch == 1:
+                    return None
+                # If channel telemetry query fails, fallback to querying channel output state
+                ch_outp = await self.get_output(channel=ch)
+                if ch_outp is not None:
+                    results[ch] = TelemetrySnapshot(
+                        voltage=0.0,
+                        current=0.0,
+                        power=0.0,
+                        output_enabled=ch_outp,
+                        channel=ch,
+                    )
+                continue
+            results[ch] = snap
+        return results if results else None
 
     async def _set_and_verify_float(self, set_cmd: str, get_cmd: str, fallback: float) -> float:
         async with self._lock:
@@ -240,19 +290,7 @@ class ScpiPsuClient:
 
     async def get_output(self, channel: int = 1) -> bool | None:
         async with self._lock:
-            if self.identity.channels > 1:
-                # First try channel-parameterized query
-                cmd = self.profile.format_get_output(channel)
-                raw = await self._query_unlocked(cmd)
-                parsed = parse_output_state(raw)
-                if parsed is not None:
-                    return parsed
-                # Fallback: select channel then query OUTP?
-                if channel > 1:
-                    await self._query_unlocked(
-                        self.profile.format_select_channel(channel), expect_reply=False
-                    )
-            return parse_output_state(await self._query_unlocked("OUTP?"))
+            return await self._get_output_unlocked(channel=channel)
 
     async def set_output(self, enabled: bool, channel: int = 1) -> bool:
         async with self._lock:

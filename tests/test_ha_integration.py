@@ -174,7 +174,13 @@ async def test_coordinator_update_and_unresponsive_recovery(
 
         # Subsequent fast poll syncs setpoints without full config poll
         coordinator.client.set_identity(parse_idn("Rigol Technologies,DP832,123,1.0"))
-        snap_std = TelemetrySnapshot(voltage=12.5, current=1.2, power=15.0, output_enabled=None)
+        snap_std = TelemetrySnapshot(
+            voltage=12.5,
+            current=1.2,
+            power=15.0,
+            output_enabled=False,
+            status_text="Standby / Output Off",
+        )
         mock_poll.return_value = snap_std
         mock_outp.return_value = False
         data_std = await coordinator._async_update_data()

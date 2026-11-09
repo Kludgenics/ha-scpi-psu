@@ -231,8 +231,8 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             if ident.raw_idn:
                 self._state.idn = ident.raw_idn
         needed = self.active_fields
-        telemetry = await self.client.poll_telemetry(channel=1, needed_fields=needed)
-        if telemetry is None:
+        all_telemetry = await self.client.poll_all_channels(needed_fields=needed)
+        if all_telemetry is None:
             self._consecutive_failures += 1
             if self._consecutive_failures >= 2:
                 if self._state.responding or self._consecutive_failures == 2:
@@ -249,38 +249,11 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         self._consecutive_failures = 0
         self._state.connected = True
         self._state.responding = True
-        self._apply_telemetry(telemetry)
 
-        if telemetry.output_enabled is None:
-            outp = await self.client.get_output(channel=1)
-            if outp is not None:
-                self._state.output_enabled = outp
-                ch1_data = self._state.channels.setdefault(1, ChannelTelemetry(channel=1))
-                ch1_data.output_enabled = outp
-                if not self.profile.reports_status_in_telemetry:
-                    self._state.status_text = "Active" if outp else "Standby / Output Off"
+        for snap in all_telemetry.values():
+            self._apply_telemetry(snap)
 
-        # Poll remaining channels if multi-channel
-        if self.identity.channels > 1:
-            for ch in range(2, self.identity.channels + 1):
-                ch_telemetry = await self.client.poll_telemetry(channel=ch, needed_fields=needed)
-                if ch_telemetry is not None:
-                    ch_telemetry.channel = ch
-                    self._apply_telemetry(ch_telemetry)
-                    if ch_telemetry.output_enabled is None:
-                        c_out = await self.client.get_output(channel=ch)
-                        if c_out is not None:
-                            ch_entry = self._state.channels.setdefault(
-                                ch, ChannelTelemetry(channel=ch)
-                            )
-                            ch_entry.output_enabled = c_out
-                else:
-                    ch_outp = await self.client.get_output(channel=ch)
-                    if ch_outp is not None:
-                        ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
-                        ch_data.output_enabled = ch_outp
-
-            self._sync_all_outputs_enabled()
+        self._sync_all_outputs_enabled()
 
         now = time.monotonic()
         if now - self._last_full_poll >= 60.0 or self._state.voltage_setpoint is None:
