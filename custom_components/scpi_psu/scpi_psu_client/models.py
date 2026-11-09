@@ -30,17 +30,13 @@ class PsuIdentity:
 
 @dataclass
 class ChannelTelemetry:
-    """Telemetry and setpoints for a single channel."""
+    """Telemetry for a single channel."""
 
     channel: int = 1
     voltage: float | None = None
     current: float | None = None
     power: float | None = None
     output_enabled: bool | None = None
-    voltage_setpoint: float | None = None
-    current_setpoint: float | None = None
-    voltage_limit: float | None = None
-    current_limit: float | None = None
     ovp_tripped: bool | None = None
     ocp_tripped: bool | None = None
     opp_tripped: bool | None = None

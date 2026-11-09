@@ -24,11 +24,6 @@ FIELD_OVP_TRIPPED = "ovp_tripped"
 FIELD_OCP_TRIPPED = "ocp_tripped"
 FIELD_OPP_TRIPPED = "opp_tripped"
 FIELD_DMM = "dmm_reading"
-FIELD_VOLTAGE_SETPOINT = "voltage_setpoint"
-FIELD_CURRENT_SETPOINT = "current_setpoint"
-FIELD_VOLTAGE_LIMIT = "voltage_limit"
-FIELD_CURRENT_LIMIT = "current_limit"
-FIELD_SYSTEM_ERROR = "system_error"
 
 
 @dataclass(frozen=True)

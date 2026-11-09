@@ -14,7 +14,6 @@ from custom_components.scpi_psu.config_flow import (
     ScpiPsuConfigFlow,
     ScpiPsuOptionsFlow,
     _async_probe_psu,
-    _clean_optional_float,
 )
 from custom_components.scpi_psu.const import (
     CONF_BAUDRATE,
@@ -27,15 +26,6 @@ from custom_components.scpi_psu.const import (
     PROFILE_AUTO,
 )
 from custom_components.scpi_psu.scpi_psu_client.models import PsuIdentity
-
-
-def test_clean_optional_float() -> None:
-    assert _clean_optional_float(None) is None
-    assert _clean_optional_float("") is None
-    assert _clean_optional_float(0) is None
-    assert _clean_optional_float(-5.0) is None
-    assert _clean_optional_float("bad") is None
-    assert _clean_optional_float("24.5") == 24.5
 
 
 async def test_async_probe_psu_helper() -> None:

@@ -248,13 +248,27 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
                 if not self.profile.reports_status_in_telemetry:
                     self._state.status_text = "Active" if outp else "Standby / Output Off"
 
-        # Poll outputs for remaining channels if multi-channel
+        # Poll remaining channels if multi-channel
         if self.identity.channels > 1:
             for ch in range(2, self.identity.channels + 1):
-                ch_outp = await self.client.get_output(channel=ch)
-                if ch_outp is not None:
-                    ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
-                    ch_data.output_enabled = ch_outp
+                ch_telemetry = await self.client.poll_telemetry(
+                    channel=ch, needed_fields=self._active_fields
+                )
+                if ch_telemetry is not None:
+                    ch_telemetry.channel = ch
+                    self._apply_telemetry(ch_telemetry)
+                    if ch_telemetry.output_enabled is None:
+                        c_out = await self.client.get_output(channel=ch)
+                        if c_out is not None:
+                            ch_entry = self._state.channels.setdefault(
+                                ch, ChannelTelemetry(channel=ch)
+                            )
+                            ch_entry.output_enabled = c_out
+                else:
+                    ch_outp = await self.client.get_output(channel=ch)
+                    if ch_outp is not None:
+                        ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
+                        ch_data.output_enabled = ch_outp
 
             active_states = [
                 c.output_enabled

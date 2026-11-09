@@ -87,11 +87,6 @@ class OwonScpiProfile(BaseScpiProfile):
     reports_status_in_telemetry = True
 
     @staticmethod
-    def format_set_all_outputs(enabled: bool) -> str:
-        state = "ON" if enabled else "OFF"
-        return f"OUTP:ALL {state}"
-
-    @staticmethod
     def format_set_voltage_limit(value: float) -> str:
         return f"VOLT:LIM {value:.3f}"
 
