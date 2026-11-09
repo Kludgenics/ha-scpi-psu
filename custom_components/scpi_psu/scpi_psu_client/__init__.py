@@ -14,11 +14,21 @@ from .models import (
 )
 
 __all__ = [
+    "FIELD_CURRENT",
+    "FIELD_DMM",
+    "FIELD_FAULT_ALARM",
+    "FIELD_OUTPUT_ENABLED",
+    "FIELD_POWER",
+    "FIELD_STATUS_TEXT",
+    "FIELD_VOLTAGE",
     "KNOWN_MODEL_SPECS",
     "PROFILES",
     "ChannelTelemetry",
+    "LatencyTracker",
     "OwonScpiProfile",
     "PsuIdentity",
+    "QueryDescriptor",
+    "QueryPlanner",
     "ScpiProfile",
     "ScpiPsuClient",
     "StandardScpiProfile",
@@ -26,3 +36,16 @@ __all__ = [
     "parse_idn",
     "parse_strict_float",
 ]
+
+from .query_planner import (
+    FIELD_CURRENT,
+    FIELD_DMM,
+    FIELD_FAULT_ALARM,
+    FIELD_OUTPUT_ENABLED,
+    FIELD_POWER,
+    FIELD_STATUS_TEXT,
+    FIELD_VOLTAGE,
+    LatencyTracker,
+    QueryDescriptor,
+    QueryPlanner,
+)

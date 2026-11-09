@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from serialx import Parity, SerialException, StopBits, open_serial_connection
 
 from .dialects import PROFILES, ScpiProfile, parse_output_state
 from .models import PsuIdentity, TelemetrySnapshot, parse_idn, parse_strict_float
+from .query_planner import QueryPlanner
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +34,9 @@ class ScpiPsuClient:
         self.configured_profile: str | None = profile_key
         self.command_delay = command_delay
         self.write_delay = write_delay
+        self.planner: QueryPlanner = QueryPlanner(
+            self.profile, self.identity.channels, self.identity.has_dmm
+        )
 
         self._lock = asyncio.Lock()
         self._reader: asyncio.StreamReader | None = None
@@ -61,8 +66,8 @@ class ScpiPsuClient:
             try:
                 self._writer.close()
                 await asyncio.wait_for(self._writer.wait_closed(), timeout=1.5)
-            except OSError, SerialException, TimeoutError:
-                pass
+            except (OSError, SerialException, TimeoutError) as err:
+                _LOGGER.debug("Error while closing transport to %s: %s", self.serial_url, err)
             self._writer = None
             self._reader = None
         self._connected = False
@@ -117,6 +122,7 @@ class ScpiPsuClient:
 
         self._drain_rx_unlocked()
         payload = (cmd.strip() + "\n").encode("ascii", errors="ignore")
+        start_t = time.monotonic()
 
         try:
             assert self._writer is not None
@@ -126,19 +132,28 @@ class ScpiPsuClient:
             if not expect_reply:
                 if self.write_delay > 0:
                     await asyncio.sleep(self.write_delay)
+                elapsed_ms = (time.monotonic() - start_t) * 1000.0
+                self.planner.latency_tracker.record_latency(cmd, elapsed_ms, success=True)
                 return ""
             raw_line = await asyncio.wait_for(self._reader.readline(), timeout=1.8)
+            elapsed_ms = (time.monotonic() - start_t) * 1000.0
             if not raw_line:
+                self.planner.latency_tracker.record_latency(cmd, elapsed_ms, success=False)
                 await self._close_transport_unlocked()
                 return None
             if self.command_delay > 0:
                 await asyncio.sleep(self.command_delay)
+            self.planner.latency_tracker.record_latency(cmd, elapsed_ms, success=True)
             return raw_line.decode("utf-8", errors="ignore").strip()
 
         except TimeoutError:
+            elapsed_ms = (time.monotonic() - start_t) * 1000.0
+            self.planner.latency_tracker.record_latency(cmd, elapsed_ms, success=False)
             _LOGGER.debug("SCPI timeout waiting for reply to '%s'", cmd)
             return None
         except (OSError, SerialException) as err:
+            elapsed_ms = (time.monotonic() - start_t) * 1000.0
+            self.planner.latency_tracker.record_latency(cmd, elapsed_ms, success=False)
             _LOGGER.warning("serialx transport error on '%s': %s", cmd, err)
             await self._close_transport_unlocked()
             return None
@@ -147,6 +162,7 @@ class ScpiPsuClient:
         async with self._lock:
             raw_idn = await self._query_unlocked("*IDN?")
             self.identity = parse_idn(raw_idn)
+            self.planner = QueryPlanner(self.profile, self.identity.channels, self.identity.has_dmm)
             return self.identity
 
     async def select_channel(self, channel: int) -> bool:
@@ -155,42 +171,56 @@ class ScpiPsuClient:
             await self._query_unlocked(cmd, expect_reply=False)
             return True
 
-    async def poll_telemetry(self, channel: int = 1) -> TelemetrySnapshot | None:
+    async def poll_telemetry(
+        self,
+        channel: int = 1,
+        needed_fields: set[str] | None = None,
+    ) -> TelemetrySnapshot | None:
         async with self._lock:
             prof = self.profile
             if self.identity.channels > 1:
                 await self._query_unlocked(prof.format_select_channel(channel), expect_reply=False)
 
-            if prof.cmd_get_composite_telemetry:
-                meas_line = await self._query_unlocked(prof.cmd_get_composite_telemetry)
-                snap = prof.parse_composite_telemetry(meas_line)
-                if snap is not None:
-                    snap.channel = channel
-                    if self.identity.has_dmm:
-                        snap.dmm_reading = parse_strict_float(
-                            await self._query_unlocked(prof.cmd_get_dmm_reading)
-                        )
-                    return snap
-
-            v = parse_strict_float(await self._query_unlocked("MEAS:VOLT?"))
-            if v is None or not (0.0 <= v <= 500.0):
-                return None
-            i = parse_strict_float(await self._query_unlocked("MEAS:CURR?"))
-            if i is None or not (0.0 <= i <= 200.0):
-                return None
-            p = parse_strict_float(await self._query_unlocked("MEAS:POW?"))
-            if p is None or not (0.0 <= p <= 10000.0):
-                p = round(v * i, 3)
-
-            dmm_val: float | None = None
+            fields = needed_fields or {
+                "voltage",
+                "current",
+                "power",
+                "output_enabled",
+                "status_text",
+                "fault_alarm",
+            }
             if self.identity.has_dmm:
-                dmm_val = parse_strict_float(await self._query_unlocked(prof.cmd_get_dmm_reading))
+                fields = fields | {"dmm_reading"}
+
+            plan = self.planner.plan_queries(fields, channel=channel)
+            if not plan:
+                return None
+
+            results: dict[str, Any] = {}
+            for desc in plan:
+                raw = await self._query_unlocked(desc.command)
+                if desc.parser:
+                    parsed = desc.parser(raw)
+                    results.update(parsed)
+
+            raw_v = results.get("voltage")
+            raw_i = results.get("current")
+            raw_p = results.get("power")
+            if raw_v is None or raw_i is None:
+                return None
+
+            val_v = float(raw_v)
+            val_i = float(raw_i)
+            val_p = float(raw_p) if raw_p is not None else round(val_v * val_i, 3)
 
             return TelemetrySnapshot(
-                voltage=round(v, 3),
-                current=round(i, 3),
-                power=round(p, 3),
-                dmm_reading=dmm_val,
+                voltage=val_v,
+                current=val_i,
+                power=val_p,
+                output_enabled=results.get("output_enabled"),
+                status_text=str(results.get("status_text", "Active")),
+                fault_alarm=results.get("fault_alarm"),
+                dmm_reading=results.get("dmm_reading"),
                 channel=channel,
             )
 

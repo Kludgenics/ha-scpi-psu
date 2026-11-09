@@ -113,6 +113,16 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             write_delay=write_delay,
         )
         self._state = ScpiPsuData(idn=initial_idn)
+        self._active_fields: set[str] = {
+            "voltage",
+            "current",
+            "power",
+            "output_enabled",
+            "status_text",
+            "fault_alarm",
+        }
+        if self.identity.has_dmm:
+            self._active_fields.add("dmm_reading")
         self._last_full_poll: float = 0.0
         self._consecutive_failures: int = 0
 
@@ -190,8 +200,10 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             ident = await self.client.probe_identity()
             if ident.raw_idn:
                 self._state.idn = ident.raw_idn
+            if self.identity.has_dmm:
+                self._active_fields.add("dmm_reading")
 
-        telemetry = await self.client.poll_telemetry()
+        telemetry = await self.client.poll_telemetry(channel=1, needed_fields=self._active_fields)
         if telemetry is None:
             self._consecutive_failures += 1
             if self._consecutive_failures >= 2:
@@ -319,6 +331,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         snap = await self.client.poll_telemetry(channel=channel)
         if snap is not None:
             self._apply_telemetry(snap)
+        # Ensure the verified actual output state is preserved even if telemetry is static or delayed
         ch_data.output_enabled = actual
         if channel == 1:
             self._state.output_enabled = actual
@@ -335,6 +348,9 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         snap = await self.client.poll_telemetry(channel=1)
         if snap is not None:
             self._apply_telemetry(snap)
+        for ch in range(1, self.identity.channels + 1):
+            ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
+            ch_data.output_enabled = actual
         self._state.output_enabled = actual
         self._state.all_outputs_enabled = actual
         self.async_set_updated_data(self._state)

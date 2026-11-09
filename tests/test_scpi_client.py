@@ -242,20 +242,21 @@ async def test_client_telemetry_and_controls() -> None:
 
     client = ScpiPsuClient("socket://127.0.0.1:5025")
     with patch.object(client, "_query_unlocked", new_callable=AsyncMock) as mock_q:
-        # Valid V, I, and missing P (computes V*I)
-        mock_q.side_effect = ["10.0", "2.5", None]
+        # OUTP?, MEAS:VOLT?, MEAS:CURR?, MEAS:POW?
+        mock_q.side_effect = ["ON", "10.0", "2.5", "25.0"]
         snap = await client.poll_telemetry()
         assert snap is not None
         assert snap.voltage == 10.0
         assert snap.current == 2.5
         assert snap.power == 25.0
+        assert snap.output_enabled is True
 
         # Invalid V returns None
-        mock_q.side_effect = [None]
+        mock_q.side_effect = ["ON", None, "2.5", "25.0"]
         assert await client.poll_telemetry() is None
 
         # Invalid I returns None
-        mock_q.side_effect = ["10.0", "999.0"]
+        mock_q.side_effect = ["ON", "10.0", "999.0", "25.0"]
         assert await client.poll_telemetry() is None
 
         # Output state queries
