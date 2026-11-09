@@ -32,6 +32,7 @@ class ScpiPsuSensorEntityDescription(SensorEntityDescription):
     """Describes SCPI PSU sensor entity."""
 
     value_fn: Callable[[ScpiPsuData], Any]
+    measurement_field: str | None = None
 
 
 SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
@@ -43,6 +44,7 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         value_fn=lambda d: d.voltage,
+        measurement_field="voltage",
     ),
     ScpiPsuSensorEntityDescription(
         key="current",
@@ -52,6 +54,7 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         value_fn=lambda d: d.current,
+        measurement_field="current",
     ),
     ScpiPsuSensorEntityDescription(
         key="power",
@@ -61,12 +64,14 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=1,
         value_fn=lambda d: d.power,
+        measurement_field="power",
     ),
     ScpiPsuSensorEntityDescription(
         key="status",
         name="Status",
         icon="mdi:power-settings",
         value_fn=lambda d: d.status_text,
+        measurement_field="status_text",
     ),
     ScpiPsuSensorEntityDescription(
         key="error_register",
@@ -84,6 +89,7 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         icon="mdi:multimeter",
         value_fn=lambda d: d.dmm_reading,
+        measurement_field="dmm_reading",
     ),
 )
 
@@ -123,6 +129,18 @@ class ScpiPsuSensor(CoordinatorEntity[ScpiPsuCoordinator], SensorEntity):
             self._attr_device_info = coordinator.channel_device_info(1)
         else:
             self._attr_device_info = coordinator.device_info
+
+    async def async_added_to_hass(self) -> None:
+        """Register field interest with coordinator when entity is added."""
+        await super().async_added_to_hass()
+        if self.entity_description.measurement_field:
+            self.coordinator.register_field_interest(self.entity_description.measurement_field)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister field interest when entity is removed."""
+        if self.entity_description.measurement_field:
+            self.coordinator.unregister_field_interest(self.entity_description.measurement_field)
+        await super().async_will_remove_from_hass()
 
     @property
     def native_value(self) -> Any:

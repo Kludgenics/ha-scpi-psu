@@ -25,6 +25,7 @@ class ScpiPsuBinarySensorEntityDescription(BinarySensorEntityDescription):
     """Describes SCPI PSU binary sensor."""
 
     value_fn: Callable[[ScpiPsuData], bool | None]
+    measurement_field: str | None = None
 
 
 BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
@@ -33,6 +34,7 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
         name="Fault",
         device_class=BinarySensorDeviceClass.PROBLEM,
         value_fn=lambda d: d.fault_alarm,
+        measurement_field="fault_alarm",
     ),
     ScpiPsuBinarySensorEntityDescription(
         key="connected",
@@ -47,6 +49,7 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda d: d.ovp_tripped,
+        measurement_field="ovp_tripped",
     ),
     ScpiPsuBinarySensorEntityDescription(
         key="ocp_tripped",
@@ -54,6 +57,7 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda d: d.ocp_tripped,
+        measurement_field="ocp_tripped",
     ),
     ScpiPsuBinarySensorEntityDescription(
         key="opp_tripped",
@@ -61,6 +65,7 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda d: d.opp_tripped,
+        measurement_field="opp_tripped",
     ),
 )
 
@@ -101,6 +106,18 @@ class ScpiPsuBinarySensor(CoordinatorEntity[ScpiPsuCoordinator], BinarySensorEnt
             self._attr_device_info = coordinator.channel_device_info(1)
         else:
             self._attr_device_info = coordinator.device_info
+
+    async def async_added_to_hass(self) -> None:
+        """Register field interest with coordinator when entity is added."""
+        await super().async_added_to_hass()
+        if self.entity_description.measurement_field:
+            self.coordinator.register_field_interest(self.entity_description.measurement_field)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister field interest when entity is removed."""
+        if self.entity_description.measurement_field:
+            self.coordinator.unregister_field_interest(self.entity_description.measurement_field)
+        await super().async_will_remove_from_hass()
 
     @property
     def is_on(self) -> bool | None:

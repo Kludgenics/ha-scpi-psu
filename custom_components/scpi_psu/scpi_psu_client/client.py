@@ -104,9 +104,10 @@ class ScpiPsuClient:
             return False
 
     def _drain_rx_unlocked(self) -> None:
-        """Drain any stale unread bytes from the StreamReader buffer non-blockingly."""
+        """Drain any stale unread bytes from the transport non-blockingly."""
         if self._reader is None:
             return
+        # If StreamReader has an internal buffer with data, clear it without blocking
         buffer: bytearray = getattr(self._reader, "_buffer", bytearray())
         if buffer:
             buffer.clear()

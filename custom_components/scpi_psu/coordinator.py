@@ -165,10 +165,6 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
     def identity(self) -> PsuIdentity:
         return self.client.identity
 
-    @identity.setter
-    def identity(self, value: PsuIdentity) -> None:
-        self.client.set_identity(value)
-
     @property
     def profile(self) -> ScpiProfile:
         return self.client.profile
@@ -246,9 +242,8 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
                         self._consecutive_failures,
                     )
                 self._mark_unresponsive()
-                if self._consecutive_failures >= 3:
+                if self._consecutive_failures == 3:
                     await self.client.close()
-                    self._consecutive_failures = 0
             self._state.connected = self.client.is_connected
             return self._state
 
@@ -286,12 +281,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
                         ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
                         ch_data.output_enabled = ch_outp
 
-            active_states = [
-                c.output_enabled
-                for c in self._state.channels.values()
-                if c.output_enabled is not None
-            ]
-            self._state.all_outputs_enabled = any(active_states) if active_states else None
+            self._sync_all_outputs_enabled()
 
         now = time.monotonic()
         if now - self._last_full_poll >= 60.0 or self._state.voltage_setpoint is None:
@@ -340,6 +330,10 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
                 self._state.output_enabled = snap.output_enabled
 
         # Update all_outputs_enabled summary
+        self._sync_all_outputs_enabled()
+
+    def _sync_all_outputs_enabled(self) -> None:
+        """Update all_outputs_enabled summary from channel states."""
         if self._state.channels:
             active_states = [
                 c.output_enabled
@@ -369,10 +363,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         ch_data.output_enabled = actual
         if channel == 1:
             self._state.output_enabled = actual
-        active_states = [
-            c.output_enabled for c in self._state.channels.values() if c.output_enabled is not None
-        ]
-        self._state.all_outputs_enabled = any(active_states) if active_states else actual
+        self._sync_all_outputs_enabled()
         snap = await self.client.poll_telemetry(channel=channel)
         if snap is not None:
             self._apply_telemetry(snap)
@@ -380,6 +371,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         ch_data.output_enabled = actual
         if channel == 1:
             self._state.output_enabled = actual
+        self._sync_all_outputs_enabled()
         self.async_set_updated_data(self._state)
 
     async def async_set_all_outputs(self, enabled: bool) -> None:

@@ -49,6 +49,14 @@ class ScpiPsuOutputSwitch(CoordinatorEntity[ScpiPsuCoordinator], SwitchEntity):
     def is_on(self) -> bool | None:
         return self.coordinator.data.output_enabled
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.coordinator.register_field_interest("output_enabled")
+
+    async def async_will_remove_from_hass(self) -> None:
+        self.coordinator.unregister_field_interest("output_enabled")
+        await super().async_will_remove_from_hass()
+
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self.coordinator.async_set_output(True)
 
@@ -74,6 +82,14 @@ class ScpiPsuChannelOutputSwitch(CoordinatorEntity[ScpiPsuCoordinator], SwitchEn
         if ch_data is not None and ch_data.output_enabled is not None:
             return ch_data.output_enabled
         return None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.coordinator.register_field_interest("output_enabled")
+
+    async def async_will_remove_from_hass(self) -> None:
+        self.coordinator.unregister_field_interest("output_enabled")
+        await super().async_will_remove_from_hass()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self.coordinator.async_set_output(True, channel=self.channel)
