@@ -20,31 +20,29 @@ Built natively on Home Assistant's **`serialx`** async serial engine (`open_seri
 
 The integration automatically detects the device profile from the IEEE 488.2 `*IDN?` string during setup:
 
-- **OWON & Rebranded Dialects** (`owon` profile):
-  - **Brands**: OWON, Abestop, Kiprim, Multicomp Pro.
-  - **Models**: `SPE3103`, `SPE6103`, `SPE6053`, `SPM3103`, `SPM6103`, `AT6301`, `AT6302`, `DC310`, `DC605`, `MP7200xx`, `ODP6062`, `P4603`, etc.
-  - **Protocol Features**: Single-transaction composite telemetry query (`MEAS:ALL:INFO?`), hardware OVP/OCP/OPP trip flags, integrated DMM readback (`:READ?` on SPM series), and output state reporting.
 - **Standard SCPI / IEEE 488.2** (`standard` profile):
   - **Brands**: Rigol, Siglent, Keysight / Agilent, Rohde & Schwarz, B&K Precision, Korad / Tenma (with SCPI bridge).
   - **Models**: Rigol `DP832`, `DP832A`, `DP831A`, `DP711`, `DP712`; Siglent `SPD3303X`, `SPD3303X-E`, `SPD1168X`, `SPD1305X`; Keysight `E36311A`, `E36103B`, `E36105B`; Rohde & Schwarz `HMP4040`, `HMP2020`, etc.
-  - **Protocol Features**: Discrete IEEE 488.2 queries (`MEAS:VOLT?`, `MEAS:CURR?`, `MEAS:POW?`, `VOLT:PROT`, `CURR:PROT`, `INST:NSEL`).
+  - **Protocol Features**: Standard IEEE 488.2 queries (`MEAS:VOLT?`, `MEAS:CURR?`, `MEAS:POW?`, `VOLT:PROT`, `CURR:PROT`, `INST:NSEL`).
+- **OWON & Rebrands** (`owon` profile):
+  - **Brands**: OWON, and rebadges / clones (Abestop, Kiprim, Multicomp Pro).
+  - **Models**: `SPE` series (`SPE3103`, `SPE6103`, `SPE6053`), `SPM` series with integrated DMM (`SPM3103`, `SPM6103`), multi-channel `ODP` series (`ODP6062`), `P4000` series (`P4603`), and clones (`AT6301`, `AT6302`, `DC310`, `DC605`, `MP7200xx`).
+  - **Protocol Features**: Single-transaction composite telemetry query (`MEAS:ALL:INFO?`), hardware OVP/OCP/OPP trip flags, integrated DMM readback (`:READ?` on SPM series), and output state reporting.
 
 ---
 
 ## Device Feature Support Matrix
 
-| Manufacturer / Series | Example Models | Dialect Profile | Channels | Composite Telemetry (`MEAS:ALL:INFO?`) | Output Toggle (`OUTP`) | V / I Setpoints (`VOLT` / `CURR`) | OVP / OCP Protection Limits | Hardware Trip Flags (OVP/OCP/OPP) | Multimeter / DMM (`:READ?`) | Sub-Device Hierarchy |
+| Manufacturer / Series | Example Models | Dialect Profile | Channels | Composite Telemetry (`MEAS:ALL:INFO?`) | Output Toggle (`OUTP`) | V / I Setpoints (`VOLT` / `CURR`) | OVP / OCP Protection Limits | Hardware Trip Flags (OVP/OCP/OPP) | Multimeter / DMM | Sub-Device Hierarchy |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Abestop** | AT6301, AT6302 | `owon` | 1 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | — | Chassis (flat) |
-| **OWON SPE / P4000** | SPE6103, SPE3103, P4603 | `owon` | 1 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | — | Chassis (flat) |
-| **OWON SPM (with DMM)** | SPM6103, SPM3103 | `owon` | 1 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | ✅ | Chassis + DMM Sub-Device |
-| **OWON ODP** | ODP6062, ODP3033 | `owon` | 2–3 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | — | Chassis + Channels 1..N |
-| **Kiprim / Multicomp** | DC310, DC605, MP7200xx | `owon` | 1 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | — | Chassis (flat) |
-| **Rigol** | DP832, DP832A, DP711 | `standard` | 1–3 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | — | Chassis + Channels 1..N |
-| **Siglent** | SPD3303X, SPD1168X | `standard` | 1–3 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | — | Chassis + Channels 1..N |
-| **Keysight** | E36311A, E36103B | `standard` | 1–3 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | ✅ (`MEAS:VOLT:DC?`) | Chassis + Channels 1..N |
+| **Rigol** | DP832, DP832A, DP831A, DP711 | `standard` | 1–3 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | — | Chassis + Channels 1..N |
+| **Siglent** | SPD3303X, SPD1168X, SPD1305X | `standard` | 1–3 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | — | Chassis + Channels 1..N |
+| **Keysight / Agilent** | E36311A, E36103B, E36105B | `standard` | 1–3 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | ✅ (`MEAS:VOLT:DC?`) | Chassis + Channels 1..N |
 | **Rohde & Schwarz** | HMP4040, HMP2020 | `standard` | 2–4 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | — | Chassis + Channels 1..N |
 | **Generic SCPI** | Any IEEE 488.2 supply | `standard` | 1+ | — (discrete) | ✅ | ✅ | ✅ (if supported) | — | — | Conditional |
+| **OWON Single-Ch & Rebrands** | SPE6103, SPE3103, P4603, AT6301, DC310 | `owon` | 1 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | — | Chassis (flat) |
+| **OWON SPM (with DMM)** | SPM6103, SPM3103 | `owon` | 1 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | ✅ (`:READ?`) | Chassis + DMM Sub-Device |
+| **OWON Multi-Channel** | ODP6062, ODP3033 | `owon` | 2–3 | ✅ | ✅ | ✅ | ✅ (`VOLT:LIM`) | ✅ | — | Chassis + Channels 1..N |
 
 > [!NOTE]
 > **Sub-Device Hierarchy**: Single-channel supplies without an integrated multimeter remain flat on the parent device to preserve existing entity IDs and dashboard configurations. Multi-channel supplies and DMM units use Home Assistant's `ChildDeviceInfo` to cleanly organize channels (`Channel 1..N`) and multimeter telemetry under the chassis device.
