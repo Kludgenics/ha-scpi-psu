@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import fields as dataclass_fields
 
 DEFAULT_BAUDRATE = 115200
 PROFILE_OWON = "owon"
@@ -49,20 +50,11 @@ class ChannelTelemetry:
 
     def apply_snapshot(self, snap: TelemetrySnapshot) -> None:
         """Update non-None fields from a TelemetrySnapshot."""
-        for attr in (
-            "voltage",
-            "current",
-            "power",
-            "ovp_tripped",
-            "ocp_tripped",
-            "opp_tripped",
-            "status_text",
-            "fault_alarm",
-            "output_enabled",
-        ):
-            val = getattr(snap, attr)
-            if val is not None:
-                setattr(self, attr, val)
+        for f in dataclass_fields(self):
+            if f.name != "channel":
+                val = getattr(snap, f.name, None)
+                if val is not None:
+                    setattr(self, f.name, val)
 
 
 @dataclass

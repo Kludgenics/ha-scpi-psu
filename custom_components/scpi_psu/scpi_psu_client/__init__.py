@@ -15,6 +15,20 @@ from .models import (
     parse_idn,
     parse_strict_float,
 )
+from .query_planner import (
+    FIELD_CURRENT,
+    FIELD_DMM,
+    FIELD_FAULT_ALARM,
+    FIELD_OCP_TRIPPED,
+    FIELD_OPP_TRIPPED,
+    FIELD_OUTPUT_ENABLED,
+    FIELD_OVP_TRIPPED,
+    FIELD_POWER,
+    FIELD_STATUS_TEXT,
+    FIELD_VOLTAGE,
+    QueryDescriptor,
+    QueryPlanner,
+)
 
 __all__ = [
     "DEFAULT_BAUDRATE",
@@ -44,18 +58,3 @@ __all__ = [
     "parse_idn",
     "parse_strict_float",
 ]
-
-from .query_planner import (
-    FIELD_CURRENT,
-    FIELD_DMM,
-    FIELD_FAULT_ALARM,
-    FIELD_OCP_TRIPPED,
-    FIELD_OPP_TRIPPED,
-    FIELD_OUTPUT_ENABLED,
-    FIELD_OVP_TRIPPED,
-    FIELD_POWER,
-    FIELD_STATUS_TEXT,
-    FIELD_VOLTAGE,
-    QueryDescriptor,
-    QueryPlanner,
-)

@@ -22,10 +22,9 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import ChildDeviceInfo, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import ScpiPsuCoordinator, ScpiPsuData
+from .coordinator import ScpiPsuCoordinator, ScpiPsuData, ScpiPsuEntity
 from .scpi_psu_client import (
     FIELD_CURRENT,
     FIELD_DMM,
@@ -125,11 +124,10 @@ async def async_setup_entry(
     )
 
 
-class ScpiPsuSensor(CoordinatorEntity[ScpiPsuCoordinator], SensorEntity):
+class ScpiPsuSensor(ScpiPsuEntity, SensorEntity):
     """Representation of an SCPI PSU sensor."""
 
     entity_description: ScpiPsuSensorEntityDescription
-    _attr_has_entity_name = True
 
     def __init__(
         self,
@@ -140,18 +138,8 @@ class ScpiPsuSensor(CoordinatorEntity[ScpiPsuCoordinator], SensorEntity):
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
         self._attr_device_info = description.device_info_fn(coordinator)
-
-    async def async_added_to_hass(self) -> None:
-        """Register field interest with coordinator when entity is added."""
-        await super().async_added_to_hass()
-        if self.entity_description.measurement_field:
-            self.coordinator.register_field_interest(self.entity_description.measurement_field)
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Unregister field interest when entity is removed."""
-        if self.entity_description.measurement_field:
-            self.coordinator.unregister_field_interest(self.entity_description.measurement_field)
-        await super().async_will_remove_from_hass()
+        if description.measurement_field:
+            self._tracked_fields = ((description.measurement_field, 1),)
 
     @property
     def native_value(self) -> Any:

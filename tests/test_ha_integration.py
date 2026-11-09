@@ -156,7 +156,8 @@ async def test_coordinator_update_and_unresponsive_recovery(
         }
         mock_err.return_value = "0,No error"
 
-        data = await coordinator._async_update_data()
+        await coordinator.async_refresh()
+        data = coordinator.data
         assert data.responding is True
         assert data.ch1.voltage == 12.5
         assert data.ch1.current == 1.2
@@ -165,7 +166,7 @@ async def test_coordinator_update_and_unresponsive_recovery(
         assert data.voltage_setpoint == 12.5
 
         # Subsequent fast poll syncs setpoints without full config poll
-        coordinator.client.set_identity(parse_idn("Rigol Technologies,DP832,123,1.0"))
+        coordinator.client.identity = parse_idn("Rigol Technologies,DP832,123,1.0")
         snap_std = TelemetrySnapshot(
             voltage=12.5,
             current=1.2,
@@ -174,96 +175,78 @@ async def test_coordinator_update_and_unresponsive_recovery(
             status_text="Standby / Output Off",
         )
         mock_poll.return_value = {1: snap_std}
-        data_std = await coordinator._async_update_data()
+        await coordinator.async_refresh()
+        data_std = coordinator.data
         assert data_std.ch1.status_text == "Standby / Output Off"
         assert data_std.voltage_setpoint == 13.0
         assert data_std.current_setpoint == 1.5
 
         mock_poll.return_value = None
-        data1 = await coordinator._async_update_data()
-        assert data1.responding is True
+        await coordinator.async_refresh()
+        assert coordinator.data.responding is True
 
-        data2 = await coordinator._async_update_data()
-        assert data2.responding is False
-        assert data2.ch1.voltage is None
-        assert data2.ch1.status_text == "Unresponsive / Power Lost"
+        await coordinator.async_refresh()
+        assert coordinator.data.responding is False
+        assert coordinator.data.ch1.voltage is None
+        assert coordinator.data.ch1.status_text == "Unresponsive / Power Lost"
 
-        data3 = await coordinator._async_update_data()
-        assert data3.responding is False
+        await coordinator.async_refresh()
+        assert coordinator.data.responding is False
         mock_close.assert_awaited_once()
 
 
 async def test_coordinator_control_methods_and_clamps(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry
 ) -> None:
+    from tests.test_scpi_client import mock_serial_responder
+
     mock_config_entry.add_to_hass(hass)
-    coordinator = ScpiPsuCoordinator(hass, mock_config_entry)
+    coordinator = ScpiPsuCoordinator(hass, mock_config_entry, command_delay=0.0, write_delay=0.0)
 
-    snap = TelemetrySnapshot(
-        voltage=24.0,
-        current=2.0,
-        power=48.0,
-        output_enabled=True,
-        status_text="Constant Voltage (CV)",
-    )
+    sent_commands: list[str] = []
+    state: dict[str, str] = {
+        "MEAS:ALL:INFO?": "24.000, 2.000, 48.000, 0, 0, 0, 1",
+        "OUTP?": "ON",
+        "VOLT?": "24.000",
+        "CURR?": "5.000",
+        "VOLT:LIM?": "24.000",
+        "CURR:LIM?": "5.000",
+        "SYST:ERR?": "0,No error",
+    }
 
-    with (
-        patch.object(coordinator.client, "set_output", new_callable=AsyncMock, return_value=True),
-        patch.object(
-            coordinator.client, "poll_telemetry", new_callable=AsyncMock, return_value=snap
-        ),
-        patch.object(
-            coordinator.client, "set_voltage", new_callable=AsyncMock, return_value=24.0
-        ) as mock_set_v,
-        patch.object(
-            coordinator.client, "set_current", new_callable=AsyncMock, return_value=5.0
-        ) as mock_set_i,
-        patch.object(
-            coordinator.client, "set_voltage_limit", new_callable=AsyncMock, return_value=24.0
-        ) as mock_set_v_lim,
-        patch.object(
-            coordinator.client, "set_current_limit", new_callable=AsyncMock, return_value=5.0
-        ) as mock_set_i_lim,
-        patch.object(
-            coordinator.client, "clear_faults", new_callable=AsyncMock
-        ) as mock_clear_faults,
-        patch.object(
-            coordinator.client,
-            "get_system_error",
-            new_callable=AsyncMock,
-            return_value="0,No error",
-        ),
-    ):
+    def _responder(cmd: str) -> str | None:
+        sent_commands.append(cmd)
+        return state.get(cmd, "")
+
+    with mock_serial_responder(_responder):
         await coordinator.async_set_output(True)
         assert coordinator.data.ch1.output_enabled is True
         assert coordinator.data.ch1.voltage == 24.0
 
         # Request 50V when clamp is 24V -> should clamp to 24.0
         await coordinator.async_set_voltage(50.0)
-        mock_set_v.assert_awaited_once_with(24.0)
+        assert "VOLT 24.000" in sent_commands
         assert coordinator.data.voltage_setpoint == 24.0
 
         # Request 10A when clamp is 5A -> should clamp to 5.0
         await coordinator.async_set_current(10.0)
-        mock_set_i.assert_awaited_once_with(5.0)
+        assert "CURR 5.000" in sent_commands
         assert coordinator.data.current_setpoint == 5.0
 
         # Request 50V OVP limit when clamp is 24V -> should clamp to 24.0
         await coordinator.async_set_voltage_limit(50.0)
-        mock_set_v_lim.assert_awaited_once_with(24.0)
+        assert "VOLT:LIM 24.000" in sent_commands
         assert coordinator.data.voltage_limit == 24.0
 
         # Request 10A OCP limit when clamp is 5A -> should clamp to 5.0
         await coordinator.async_set_current_limit(10.0)
-        mock_set_i_lim.assert_awaited_once_with(5.0)
+        assert "CURR:LIM 5.000" in sent_commands
         assert coordinator.data.current_limit == 5.0
 
         # Reset errors
         await coordinator.async_reset_errors()
-        mock_clear_faults.assert_awaited_once()
+        assert "*CLS" in sent_commands
         assert coordinator.data.system_error == "0,No error"
 
-    with patch.object(coordinator.client, "close", new_callable=AsyncMock) as mock_close:
         await coordinator.async_close()
-        mock_close.assert_awaited_once()
         assert coordinator.data.connected is False

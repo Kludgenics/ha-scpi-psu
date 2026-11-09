@@ -86,18 +86,16 @@ async def test_sensor_entities(hass: HomeAssistant) -> None:
     # Test when device has DMM capability (e.g. SPM6103)
     from custom_components.scpi_psu.scpi_psu_client.models import PsuIdentity
 
-    coordinator.client.set_identity(
-        PsuIdentity(
-            manufacturer="OWON",
-            model="SPM6103",
-            serial_number="123",
-            firmware="1.0",
-            raw_idn="OWON,SPM6103,123,1.0",
-            profile_key="owon",
-            hw_max_voltage=60.0,
-            hw_max_current=10.0,
-            has_dmm=True,
-        )
+    coordinator.client.identity = PsuIdentity(
+        manufacturer="OWON",
+        model="SPM6103",
+        serial_number="123",
+        firmware="1.0",
+        raw_idn="OWON,SPM6103,123,1.0",
+        profile_key="owon",
+        hw_max_voltage=60.0,
+        hw_max_current=10.0,
+        has_dmm=True,
     )
     coordinator.data.dmm_reading = 3.3
     dmm_added: list[sensor.ScpiPsuSensor] = []
@@ -153,7 +151,7 @@ async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
     # OWON profile: all 5 binary sensors registered
     from custom_components.scpi_psu.scpi_psu_client.models import parse_idn
 
-    coordinator.client.set_identity(parse_idn("OWON,SPE6103,123,1.0"))
+    coordinator.client.identity = parse_idn("OWON,SPE6103,123,1.0")
     added: list[binary_sensor.ScpiPsuBinarySensor] = []
     await binary_sensor.async_setup_entry(
         hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
@@ -222,18 +220,16 @@ async def test_multichannel_switch_entities(hass: HomeAssistant) -> None:
     )
     entry.add_to_hass(hass)
     coordinator = ScpiPsuCoordinator(hass, entry)
-    coordinator.client.set_identity(
-        coordinator.identity.__class__(
-            manufacturer="RIGOL",
-            model="DP832",
-            serial_number="DP80000001",
-            firmware="00.01.16",
-            raw_idn="RIGOL TECHNOLOGIES,DP832,DP80000001,00.01.16",
-            profile_key="standard",
-            hw_max_voltage=30.0,
-            hw_max_current=3.0,
-            channels=3,
-        )
+    coordinator.client.identity = coordinator.identity.__class__(
+        manufacturer="RIGOL",
+        model="DP832",
+        serial_number="DP80000001",
+        firmware="00.01.16",
+        raw_idn="RIGOL TECHNOLOGIES,DP832,DP80000001,00.01.16",
+        profile_key="standard",
+        hw_max_voltage=30.0,
+        hw_max_current=3.0,
+        channels=3,
     )
     coordinator.data = ScpiPsuData(
         all_outputs_enabled=False,

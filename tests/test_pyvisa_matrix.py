@@ -513,8 +513,7 @@ async def test_simulated_fault_trip_and_clear(hass: HomeAssistant) -> None:
 
             # 2. Toggle output off -> triggers fault/OCP trip in sim
             await switches[0].async_turn_off()
-            # Force coordinator data poll update
-            await coordinator._async_update_data()
+            await coordinator.async_refresh()
 
             assert fault_active is True
             assert bin_map["fault"].is_on is True
@@ -523,7 +522,7 @@ async def test_simulated_fault_trip_and_clear(hass: HomeAssistant) -> None:
 
             # 3. Press Clear Fault button -> sends *CLS, resets trip and recovers
             await buttons[0].async_press()
-            await coordinator._async_update_data()
+            await coordinator.async_refresh()
 
             assert fault_active is False
             assert bin_map["fault"].is_on is False

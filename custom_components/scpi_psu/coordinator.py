@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import ChildDeviceInfo, DeviceInfo
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 
 from .const import (
     CONF_BAUDRATE,
@@ -23,6 +24,9 @@ from .const import (
     DEFAULT_BAUDRATE,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    FAILURES_BEFORE_DISCONNECT,
+    FAILURES_BEFORE_UNRESPONSIVE,
+    FULL_POLL_INTERVAL,
     PROFILE_AUTO,
     channel_identifier,
     dmm_identifier,
@@ -36,6 +40,7 @@ from .scpi_psu_client import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+STATUS_UNRESPONSIVE = "Unresponsive / Power Lost"
 
 
 @dataclass
@@ -58,7 +63,7 @@ class ScpiPsuData:
     def ch1(self) -> ChannelTelemetry:
         """Return primary Channel 1 telemetry."""
         return self.channels.setdefault(
-            1, ChannelTelemetry(channel=1, status_text="Unresponsive / Power Lost")
+            1, ChannelTelemetry(channel=1, status_text=STATUS_UNRESPONSIVE)
         )
 
 
@@ -197,9 +202,8 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
 
     def _mark_unresponsive(self) -> None:
         self._state.responding = False
-        self._state.channels[1] = ChannelTelemetry(
-            channel=1, status_text="Unresponsive / Power Lost"
-        )
+        for ch in range(1, max(1, self.identity.channels) + 1):
+            self._state.channels[ch] = ChannelTelemetry(channel=ch, status_text=STATUS_UNRESPONSIVE)
 
     async def _async_update_data(self) -> ScpiPsuData:
         if not self._state.idn or "," not in self._state.idn:
@@ -211,14 +215,17 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         )
         if all_telemetry is None:
             self._consecutive_failures += 1
-            if self._consecutive_failures >= 2:
-                if self._state.responding or self._consecutive_failures == 2:
+            if self._consecutive_failures >= FAILURES_BEFORE_UNRESPONSIVE:
+                if (
+                    self._state.responding
+                    or self._consecutive_failures == FAILURES_BEFORE_UNRESPONSIVE
+                ):
                     _LOGGER.warning(
                         "SCPI PSU unresponsive (%d consecutive failures) — marking sensors unknown",
                         self._consecutive_failures,
                     )
                 self._mark_unresponsive()
-                if self._consecutive_failures == 3:
+                if self._consecutive_failures >= FAILURES_BEFORE_DISCONNECT:
                     await self.client.close()
             self._state.connected = self.client.is_connected
             return self._state
@@ -231,7 +238,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             self._apply_telemetry(snap)
 
         now = time.monotonic()
-        if now - self._last_full_poll >= 60.0 or self._state.voltage_setpoint is None:
+        if now - self._last_full_poll >= FULL_POLL_INTERVAL or self._state.voltage_setpoint is None:
             registers = await self.client.get_config_registers()
             for key in ("voltage_limit", "current_limit", "voltage_setpoint", "current_setpoint"):
                 if registers[key] is not None:
@@ -306,29 +313,59 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         self._state.all_outputs_enabled = actual
         self.async_set_updated_data(self._state)
 
-    async def async_set_voltage(self, value: float) -> None:
-        clamped = self._clamp_value(value, self.effective_max_voltage, "voltage", "V")
-        actual = await self.client.set_voltage(clamped)
-        self._state.voltage_setpoint = round(actual, 3)
+    async def _async_set_clamped_float(
+        self,
+        value: float,
+        ceiling: float,
+        label: str,
+        unit: str,
+        setter: Callable[[float], Awaitable[float]],
+        state_attr: str,
+    ) -> None:
+        clamped = self._clamp_value(value, ceiling, label, unit)
+        actual = await setter(clamped)
+        setattr(self._state, state_attr, round(actual, 3))
         self.async_set_updated_data(self._state)
+
+    async def async_set_voltage(self, value: float) -> None:
+        await self._async_set_clamped_float(
+            value,
+            self.effective_max_voltage,
+            "voltage",
+            "V",
+            self.client.set_voltage,
+            "voltage_setpoint",
+        )
 
     async def async_set_current(self, value: float) -> None:
-        clamped = self._clamp_value(value, self.effective_max_current, "current", "A")
-        actual = await self.client.set_current(clamped)
-        self._state.current_setpoint = round(actual, 3)
-        self.async_set_updated_data(self._state)
+        await self._async_set_clamped_float(
+            value,
+            self.effective_max_current,
+            "current",
+            "A",
+            self.client.set_current,
+            "current_setpoint",
+        )
 
     async def async_set_voltage_limit(self, value: float) -> None:
-        clamped = self._clamp_value(value, self.effective_max_voltage, "OVP limit", "V")
-        actual = await self.client.set_voltage_limit(clamped)
-        self._state.voltage_limit = round(actual, 3)
-        self.async_set_updated_data(self._state)
+        await self._async_set_clamped_float(
+            value,
+            self.effective_max_voltage,
+            "OVP limit",
+            "V",
+            self.client.set_voltage_limit,
+            "voltage_limit",
+        )
 
     async def async_set_current_limit(self, value: float) -> None:
-        clamped = self._clamp_value(value, self.effective_max_current, "OCP limit", "A")
-        actual = await self.client.set_current_limit(clamped)
-        self._state.current_limit = round(actual, 3)
-        self.async_set_updated_data(self._state)
+        await self._async_set_clamped_float(
+            value,
+            self.effective_max_current,
+            "OCP limit",
+            "A",
+            self.client.set_current_limit,
+            "current_limit",
+        )
 
     async def async_reset_errors(self) -> None:
         await self.client.clear_faults()
@@ -337,3 +374,22 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             self._apply_telemetry(snap)
         self._state.system_error = await self.client.get_system_error()
         self.async_set_updated_data(self._state)
+
+
+class ScpiPsuEntity(CoordinatorEntity[ScpiPsuCoordinator]):
+    """Base entity for SCPI PSU entities managing field-interest registration."""
+
+    _attr_has_entity_name = True
+    _tracked_fields: tuple[tuple[str, int], ...] = ()
+
+    async def async_added_to_hass(self) -> None:
+        """Register field interest with coordinator when entity is added."""
+        await super().async_added_to_hass()
+        for field_name, ch in self._tracked_fields:
+            self.coordinator.register_field_interest(field_name, channel=ch)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister field interest when entity is removed."""
+        for field_name, ch in self._tracked_fields:
+            self.coordinator.unregister_field_interest(field_name, channel=ch)
+        await super().async_will_remove_from_hass()

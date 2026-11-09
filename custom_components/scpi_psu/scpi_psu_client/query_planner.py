@@ -48,9 +48,8 @@ class QueryDescriptor:
 class QueryPlanner:
     """Constructs minimal, deterministic SCPI telemetry queries."""
 
-    def __init__(self, profile: ScpiProfile, channels: int = 1, has_dmm: bool = False) -> None:
+    def __init__(self, profile: ScpiProfile, has_dmm: bool = False) -> None:
         self.profile = profile
-        self.channels = max(1, channels)
         self.has_dmm = has_dmm
 
     def plan_queries(
@@ -72,17 +71,7 @@ class QueryPlanner:
                 snap = prof.parse_composite_telemetry(raw)
                 if snap is None:
                     return {}
-                return {
-                    FIELD_VOLTAGE: snap.voltage,
-                    FIELD_CURRENT: snap.current,
-                    FIELD_POWER: snap.power,
-                    FIELD_STATUS_TEXT: snap.status_text,
-                    FIELD_FAULT_ALARM: snap.fault_alarm,
-                    FIELD_OUTPUT_ENABLED: snap.output_enabled,
-                    FIELD_OVP_TRIPPED: snap.ovp_tripped,
-                    FIELD_OCP_TRIPPED: snap.ocp_tripped,
-                    FIELD_OPP_TRIPPED: snap.opp_tripped,
-                }
+                return {f: getattr(snap, f) for f in COMPOSITE_FIELDS}
 
             desc = QueryDescriptor(
                 command=prof.cmd_get_composite_telemetry,
@@ -137,7 +126,7 @@ class QueryPlanner:
         if FIELD_OUTPUT_ENABLED in fields or (
             FIELD_STATUS_TEXT in fields and not prof.reports_status_in_telemetry
         ):
-            outp_cmd = prof.format_get_output(channel) if self.channels > 1 else "OUTP?"
+            outp_cmd = prof.format_get_output(channel)
 
             def _parse_outp(raw: str | None) -> dict[str, Any]:
                 st = parse_output_state(raw)

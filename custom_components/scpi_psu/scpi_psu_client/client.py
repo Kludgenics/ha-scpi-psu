@@ -52,18 +52,13 @@ class ScpiPsuClient:
         self.configured_profile: str | None = profile_key
         self.command_delay = command_delay
         self.write_delay = write_delay
-        self.planner: QueryPlanner = QueryPlanner(
-            self.profile, self.identity.channels, self.identity.has_dmm
-        )
-
         self._lock = asyncio.Lock()
         self._reader: asyncio.StreamReader | None = None
         self._writer: Any = None
-        self._connected: bool = False
 
     @property
     def is_connected(self) -> bool:
-        return self._connected and self._writer is not None and not self._writer.is_closing()
+        return self._writer is not None and not self._writer.is_closing()
 
     @property
     def profile(self) -> ScpiProfile:
@@ -71,8 +66,13 @@ class ScpiPsuClient:
             return PROFILES[self.configured_profile]
         return PROFILES.get(self.identity.profile_key, PROFILES[PROFILE_STANDARD])
 
+    @property
+    def planner(self) -> QueryPlanner:
+        return QueryPlanner(self.profile, self.identity.has_dmm)
+
     def default_fields_by_channel(self) -> dict[int, set[str]]:
         """Return the default telemetry fields to poll for each hardware channel."""
+        prof = self.profile
         ch1_fields = {
             FIELD_VOLTAGE,
             FIELD_CURRENT,
@@ -80,7 +80,7 @@ class ScpiPsuClient:
             FIELD_OUTPUT_ENABLED,
             FIELD_STATUS_TEXT,
         }
-        if self.profile.reports_status_in_telemetry:
+        if prof.reports_status_in_telemetry:
             ch1_fields.update(
                 {
                     FIELD_FAULT_ALARM,
@@ -89,6 +89,11 @@ class ScpiPsuClient:
                     FIELD_OPP_TRIPPED,
                 }
             )
+        else:
+            if prof.cmd_get_ovp_tripped:
+                ch1_fields.add(FIELD_OVP_TRIPPED)
+            if prof.cmd_get_ocp_tripped:
+                ch1_fields.add(FIELD_OCP_TRIPPED)
         if self.identity.has_dmm:
             ch1_fields.add(FIELD_DMM)
         result: dict[int, set[str]] = {1: ch1_fields}
@@ -113,11 +118,9 @@ class ScpiPsuClient:
                 _LOGGER.debug("Error while closing transport to %s: %s", self.serial_url, err)
             self._writer = None
             self._reader = None
-        self._connected = False
 
     async def _ensure_connected_unlocked(self) -> bool:
-        if self._writer is not None and not self._writer.is_closing():
-            self._connected = True
+        if self.is_connected:
             return True
 
         await self._close_transport_unlocked()
@@ -135,14 +138,12 @@ class ScpiPsuClient:
                 ),
                 timeout=3.5,
             )
-            self._connected = True
             _LOGGER.info("Connected to SCPI PSU at %s", self.serial_url)
             if self.write_delay > 0:
                 await asyncio.sleep(self.write_delay)
             return True
         except (OSError, SerialException, TimeoutError) as err:
             _LOGGER.debug("serialx connect to %s failed: %s", self.serial_url, err)
-            self._connected = False
             return False
 
     async def query(self, cmd: str, expect_reply: bool = True) -> str | None:
@@ -181,15 +182,10 @@ class ScpiPsuClient:
             await self._close_transport_unlocked()
             return None
 
-    def set_identity(self, identity: PsuIdentity) -> None:
-        """Update client identity and reconfigure query planner capabilities."""
-        self.identity = identity
-        self.planner = QueryPlanner(self.profile, self.identity.channels, self.identity.has_dmm)
-
     async def probe_identity(self) -> PsuIdentity:
         async with self._lock:
             raw_idn = await self._query_unlocked("*IDN?")
-            self.set_identity(parse_idn(raw_idn))
+            self.identity = parse_idn(raw_idn)
             return self.identity
 
     async def select_channel(self, channel: int) -> bool:
@@ -229,6 +225,8 @@ class ScpiPsuClient:
         if not results:
             return None
 
+        outp = results.get(FIELD_OUTPUT_ENABLED)
+
         raw_v = results.get(FIELD_VOLTAGE)
         raw_i = results.get(FIELD_CURRENT)
         raw_p = results.get(FIELD_POWER)
@@ -247,10 +245,6 @@ class ScpiPsuClient:
             val_p = round(val_v * val_i, 3)
         else:
             val_p = None
-
-        outp = results.get(FIELD_OUTPUT_ENABLED)
-        if outp is None and FIELD_OUTPUT_ENABLED in fields and self.identity.channels > 1:
-            outp = await self._get_output_unlocked(channel=channel)
 
         status = results.get(FIELD_STATUS_TEXT)
         if status is None and FIELD_STATUS_TEXT in fields:
@@ -281,14 +275,18 @@ class ScpiPsuClient:
     async def _get_output_unlocked(self, channel: int = 1) -> bool | None:
         if self.identity.channels > 1:
             cmd = self.profile.format_get_output(channel)
-            raw = await self._query_unlocked(cmd)
-            parsed = parse_output_state(raw)
+            parsed = parse_output_state(await self._query_unlocked(cmd))
             if parsed is not None:
                 return parsed
             if channel > 1:
                 await self._query_unlocked(
                     self.profile.format_select_channel(channel), expect_reply=False
                 )
+                parsed = parse_output_state(await self._query_unlocked("OUTP?"))
+                await self._query_unlocked(
+                    self.profile.format_select_channel(1), expect_reply=False
+                )
+                return parsed
         return parse_output_state(await self._query_unlocked("OUTP?"))
 
     async def poll_all_channels(
@@ -303,16 +301,21 @@ class ScpiPsuClient:
             else self.default_fields_by_channel()
         )
         results: dict[int, TelemetrySnapshot] = {}
-        for ch in range(1, total_ch + 1):
-            ch_fields = field_map.get(ch)
-            if not ch_fields:
-                continue
-            snap = await self.poll_telemetry(channel=ch, needed_fields=ch_fields)
-            if snap is None:
-                if ch == 1:
-                    return None
-                continue
-            results[ch] = snap
+        async with self._lock:
+            for ch in range(1, total_ch + 1):
+                ch_fields = field_map.get(ch)
+                if not ch_fields:
+                    continue
+                snap = await self._poll_channel_unlocked(channel=ch, needed_fields=ch_fields)
+                if snap is None:
+                    if ch == 1:
+                        return None
+                    continue
+                results[ch] = snap
+            if total_ch > 1:
+                await self._query_unlocked(
+                    self.profile.format_select_channel(1), expect_reply=False
+                )
         return results if results else None
 
     async def _set_and_verify_float(self, set_cmd: str, get_cmd: str, fallback: float) -> float:
@@ -327,32 +330,17 @@ class ScpiPsuClient:
 
     async def set_output(self, enabled: bool, channel: int = 1) -> bool:
         async with self._lock:
-            if self.identity.channels > 1:
-                cmd = self.profile.format_set_output(enabled, channel)
-                await self._query_unlocked(cmd, expect_reply=False)
-                # Verify readback
-                get_cmd = self.profile.format_get_output(channel)
-                parsed = parse_output_state(await self._query_unlocked(get_cmd))
-                if parsed is not None:
-                    return parsed
-                await self._query_unlocked(
-                    self.profile.format_select_channel(channel), expect_reply=False
-                )
-            else:
-                cmd = self.profile.format_set_output(enabled)
-                await self._query_unlocked(cmd, expect_reply=False)
-
-            parsed = parse_output_state(await self._query_unlocked("OUTP?"))
+            cmd = self.profile.format_set_output(enabled, channel)
+            await self._query_unlocked(cmd, expect_reply=False)
+            parsed = await self._get_output_unlocked(channel=channel)
             return parsed if parsed is not None else enabled
 
     async def set_all_outputs(self, enabled: bool) -> bool:
         """Atomically set all outputs on a multi-channel power supply."""
         async with self._lock:
-            # Try atomic broadcast command OUTP:ALL
             cmd = self.profile.format_set_all_outputs(enabled)
             await self._query_unlocked(cmd, expect_reply=False)
             for ch in range(1, self.identity.channels + 1):
-                # Ensure each channel state matches
                 ch_cmd = self.profile.format_set_output(enabled, ch)
                 await self._query_unlocked(ch_cmd, expect_reply=False)
             return enabled
@@ -394,58 +382,58 @@ class ScpiPsuClient:
         val = parse_strict_float(await self._query_unlocked(cmd))
         return round(val, 3) if val is not None and 0.0 <= val <= max_val else None
 
-    async def _get_setpoints_unlocked(
-        self, max_v_hw: float, max_i_hw: float
+    async def _query_float_group_unlocked(
+        self, spec: list[tuple[str, str, float]]
     ) -> dict[str, float | None]:
-        prof = self.profile
-        if prof.supports_compound_queries:
-            cmd = f"{prof.cmd_get_voltage_setpoint};:{prof.cmd_get_current_setpoint}"
+        if self.profile.supports_compound_queries and len(spec) > 1:
+            cmd = ";:".join(c.lstrip(":") for _, c, _ in spec)
             raw = await self._query_unlocked(cmd)
             if raw and ";" in raw:
                 parts = [p.strip() for p in raw.split(";")]
-                if len(parts) == 2:
-                    v = parse_strict_float(parts[0])
-                    i = parse_strict_float(parts[1])
+                if len(parts) == len(spec):
                     return {
-                        "voltage_setpoint": round(v, 3)
-                        if v is not None and 0.0 <= v <= max_v_hw
-                        else None,
-                        "current_setpoint": round(i, 3)
-                        if i is not None and 0.0 <= i <= max_i_hw
-                        else None,
+                        key: (
+                            round(v, 3)
+                            if (v := parse_strict_float(part)) is not None and 0.0 <= v <= max_val
+                            else None
+                        )
+                        for (key, _, max_val), part in zip(spec, parts, strict=True)
                     }
 
         return {
-            "voltage_setpoint": await self._query_bounded_float_unlocked(
-                prof.cmd_get_voltage_setpoint, max_v_hw
-            ),
-            "current_setpoint": await self._query_bounded_float_unlocked(
-                prof.cmd_get_current_setpoint, max_i_hw
-            ),
+            key: await self._query_bounded_float_unlocked(c, max_val) for key, c, max_val in spec
         }
 
-    async def get_setpoints(self) -> dict[str, float | None]:
-        max_v_hw = self.identity.hw_max_voltage * 1.15
-        max_i_hw = self.identity.hw_max_current * 1.15
+    def _setpoint_spec(self) -> list[tuple[str, str, float]]:
+        prof = self.profile
+        return [
+            (
+                "voltage_setpoint",
+                prof.cmd_get_voltage_setpoint,
+                self.identity.hw_max_voltage * 1.15,
+            ),
+            (
+                "current_setpoint",
+                prof.cmd_get_current_setpoint,
+                self.identity.hw_max_current * 1.15,
+            ),
+        ]
 
+    async def get_setpoints(self) -> dict[str, float | None]:
         async with self._lock:
-            return await self._get_setpoints_unlocked(max_v_hw, max_i_hw)
+            return await self._query_float_group_unlocked(self._setpoint_spec())
 
     async def get_config_registers(self) -> dict[str, float | None]:
         prof = self.profile
         max_v_hw = self.identity.hw_max_voltage * 1.15
         max_i_hw = self.identity.hw_max_current * 1.15
-
+        spec = [
+            ("voltage_limit", prof.cmd_get_voltage_limit, max_v_hw),
+            ("current_limit", prof.cmd_get_current_limit, max_i_hw),
+            *self._setpoint_spec(),
+        ]
         async with self._lock:
-            return {
-                "voltage_limit": await self._query_bounded_float_unlocked(
-                    prof.cmd_get_voltage_limit, max_v_hw
-                ),
-                "current_limit": await self._query_bounded_float_unlocked(
-                    prof.cmd_get_current_limit, max_i_hw
-                ),
-                **(await self._get_setpoints_unlocked(max_v_hw, max_i_hw)),
-            }
+            return await self._query_float_group_unlocked(spec)
 
     async def clear_faults(self) -> None:
         async with self._lock:

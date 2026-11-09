@@ -15,7 +15,7 @@ from custom_components.scpi_psu.scpi_psu_client.query_planner import (
 
 
 def test_query_planner_owon_profile() -> None:
-    owon_planner = QueryPlanner(OwonScpiProfile(), channels=1, has_dmm=True)
+    owon_planner = QueryPlanner(OwonScpiProfile(), has_dmm=True)
 
     # When multiple fields are requested, OWON selects composite MEAS:ALL:INFO?
     plan = owon_planner.plan_queries({FIELD_VOLTAGE, FIELD_CURRENT, FIELD_POWER, FIELD_STATUS_TEXT})
@@ -37,7 +37,7 @@ def test_query_planner_owon_profile() -> None:
 
 
 def test_query_planner_standard_scpi_compound_pipeline() -> None:
-    std_planner = QueryPlanner(StandardScpiProfile(), channels=1, has_dmm=False)
+    std_planner = QueryPlanner(StandardScpiProfile(), has_dmm=False)
 
     # When multiple fields are needed on Standard SCPI, they are bundled into 1 semicolon compound query
     plan_std = std_planner.plan_queries(
@@ -63,7 +63,7 @@ def test_query_planner_standard_scpi_compound_pipeline() -> None:
 async def test_partial_telemetry_and_channel_field_interest() -> None:
     """Verify polling only a subset of fields (e.g. voltage disabled or channel 2 output only)."""
     from custom_components.scpi_psu.scpi_psu_client.client import ScpiPsuClient
-    from tests.test_scpi_client import _attach_responder
+    from tests.test_scpi_client import mock_serial_responder
 
     client = ScpiPsuClient(
         "socket://127.0.0.1:5025",
@@ -83,42 +83,48 @@ async def test_partial_telemetry_and_channel_field_interest() -> None:
             return "12.000;ON"
         return ""
 
-    _attach_responder(client, _responder)
+    with mock_serial_responder(_responder):
+        # 1. Poll only current (voltage sensor disabled by user) -> succeeds with voltage=None
+        snap_curr = await client.poll_telemetry(channel=1, needed_fields={FIELD_CURRENT})
+        assert snap_curr is not None
+        assert snap_curr.current == 1.75
+        assert snap_curr.voltage is None
+        assert snap_curr.power is None
+        assert queried_commands == ["INST:NSEL 1", "MEAS:CURR?"]
 
-    # 1. Poll only current (voltage sensor disabled by user) -> succeeds with voltage=None
-    snap_curr = await client.poll_telemetry(channel=1, needed_fields={FIELD_CURRENT})
-    assert snap_curr is not None
-    assert snap_curr.current == 1.75
-    assert snap_curr.voltage is None
-    assert snap_curr.power is None
-    assert queried_commands == ["INST:NSEL 1", "MEAS:CURR?"]
+        # 2. Poll only status_text on Standard SCPI -> covered by OUTP? without needing voltage/current
+        queried_commands.clear()
+        snap_status = await client.poll_telemetry(channel=1, needed_fields={FIELD_STATUS_TEXT})
+        assert snap_status is not None
+        assert snap_status.output_enabled is True
+        assert snap_status.status_text == "Active"
+        assert queried_commands == ["INST:NSEL 1", "OUTP?"]
 
-    # 2. Poll only status_text on Standard SCPI -> covered by OUTP? without needing voltage/current
-    queried_commands.clear()
-    snap_status = await client.poll_telemetry(channel=1, needed_fields={FIELD_STATUS_TEXT})
-    assert snap_status is not None
-    assert snap_status.output_enabled is True
-    assert snap_status.status_text == "Active"
-    assert queried_commands == ["INST:NSEL 1", "OUTP?"]
-
-    # 3. Poll all channels with per-channel field map (CH1: current, CH2: output_enabled)
-    queried_commands.clear()
-    all_snaps = await client.poll_all_channels(
-        needed_fields_by_channel={
-            1: {FIELD_CURRENT},
-            2: {FIELD_OUTPUT_ENABLED},
-        }
-    )
-    assert all_snaps is not None
-    assert set(all_snaps.keys()) == {1, 2}
-    assert all_snaps[1].current == 1.75
-    assert all_snaps[2].output_enabled is True
-    assert all_snaps[2].voltage is None
+        # 3. Poll all channels with per-channel field map (CH1: current, CH2: output_enabled)
+        queried_commands.clear()
+        all_snaps = await client.poll_all_channels(
+            needed_fields_by_channel={
+                1: {FIELD_CURRENT},
+                2: {FIELD_OUTPUT_ENABLED},
+            }
+        )
+        assert all_snaps is not None
+        assert set(all_snaps.keys()) == {1, 2}
+        assert all_snaps[1].current == 1.75
+        assert all_snaps[2].output_enabled is True
+        assert all_snaps[2].voltage is None
+        assert queried_commands == [
+            "INST:NSEL 1",
+            "MEAS:CURR?",
+            "INST:NSEL 2",
+            "OUTP? CH2",
+            "INST:NSEL 1",
+        ]
 
 
 def test_compound_query_error_and_corrupt_parsing() -> None:
     """Verify compound query parsing resilience against missing, empty, or garbage tokens."""
-    std_planner = QueryPlanner(StandardScpiProfile(), channels=1)
+    std_planner = QueryPlanner(StandardScpiProfile())
     plan = std_planner.plan_queries({FIELD_VOLTAGE, FIELD_CURRENT, FIELD_OUTPUT_ENABLED})
     assert len(plan) == 1
     parser = plan[0].parser
