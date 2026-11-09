@@ -507,7 +507,7 @@ class ScpiPsuClient:
             err = await self._query_unlocked("SYST:ERR?")
             if err is None:
                 return None
-            if re.fullmatch(r'[+-]?\d+\s*,\s*(?:"[^"\r\n]*"|[^,\r\n]+)', err):
+            if re.fullmatch(r'(?:[+-]?\d+\s*,\s*(?:"[^"\r\n]*"|[^,\r\n]+)|0[xX][0-9a-fA-F]+)', err):
                 return err
             _LOGGER.warning(
                 "Unexpected reply to SYST:ERR?; discarding unsynchronized session: %r", err

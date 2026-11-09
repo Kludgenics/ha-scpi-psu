@@ -722,3 +722,21 @@ async def test_error_recovery_does_not_issue_query_without_identity_boundary() -
         assert await client.query("VOLT?") is None
         assert not client.is_connected
         assert b"VOLT?\n" not in [call.args[0] for call in writer.write.call_args_list]
+
+
+@pytest.mark.parametrize("reply", ["0x0000", "0x001A", '0,"No error"'])
+async def test_system_error_accepts_hex_register_without_losing_alignment(reply: str) -> None:
+    client = ScpiPsuClient(
+        "socket://bridge:4001", initial_idn="OWON,SPE6103,123,1.0", command_delay=0, write_delay=0
+    )
+    with mock_serial_responder(
+        lambda command: reply if command == "SYST:ERR?" else "12.345"
+    ) as writer:
+        assert await client.get_system_error() == reply
+        assert client.is_connected
+        assert await client.query("VOLT?") == "12.345"
+        assert [call.args[0] for call in writer.write.call_args_list] == [
+            b"SYST:ERR?\n",
+            b"VOLT?\n",
+        ]
+    await client.close()
