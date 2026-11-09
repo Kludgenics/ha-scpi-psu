@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass
-from datetime import timedelta
 import logging
 import time
-from typing import Any
-
-from serialx import SerialException
+from dataclasses import dataclass
+from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant

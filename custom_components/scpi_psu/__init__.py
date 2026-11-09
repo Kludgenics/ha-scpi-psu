@@ -14,7 +14,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
-from .const import CONF_SERIAL_PORT, DOMAIN
+from .const import DOMAIN
 from .coordinator import ScpiPsuCoordinator
 
 PLATFORMS: list[Platform] = [

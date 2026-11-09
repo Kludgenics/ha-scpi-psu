@@ -13,7 +13,12 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfPower
+from homeassistant.const import (
+    EntityCategory,
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
+    UnitOfPower,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -82,9 +87,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up SCPI PSU sensors."""
     coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        ScpiPsuSensor(coordinator, description) for description in SENSORS
-    )
+    async_add_entities(ScpiPsuSensor(coordinator, description) for description in SENSORS)
 
 
 class ScpiPsuSensor(CoordinatorEntity[ScpiPsuCoordinator], SensorEntity):

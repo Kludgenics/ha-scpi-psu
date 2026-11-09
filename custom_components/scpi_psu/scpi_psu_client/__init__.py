@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from .client import ScpiPsuClient
 from .dialects import PROFILES, OwonScpiProfile, StandardScpiProfile
-from .exceptions import ScpiConnectionError, ScpiError, ScpiProtocolError, ScpiTimeoutError
+from .exceptions import (
+    ScpiConnectionError,
+    ScpiError,
+    ScpiProtocolError,
+    ScpiTimeoutError,
+)
 from .models import (
     KNOWN_MODEL_LIMITS,
     PsuIdentity,
@@ -15,8 +20,8 @@ from .models import (
 
 __all__ = [
     "KNOWN_MODEL_LIMITS",
-    "OwonScpiProfile",
     "PROFILES",
+    "OwonScpiProfile",
     "PsuIdentity",
     "ScpiConnectionError",
     "ScpiError",

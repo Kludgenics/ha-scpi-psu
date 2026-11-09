@@ -1,12 +1,18 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 from homeassistant.core import HomeAssistant
-from homeassistant.config_entries import ConfigEntry
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.scpi_psu.const import DOMAIN, CONF_SERIAL_PORT, CONF_BAUDRATE, CONF_SCAN_INTERVAL
+from custom_components.scpi_psu.const import (
+    CONF_BAUDRATE,
+    CONF_SCAN_INTERVAL,
+    CONF_SERIAL_PORT,
+    DOMAIN,
+)
 from custom_components.scpi_psu.coordinator import ScpiPsuCoordinator
 from custom_components.scpi_psu.scpi_psu_client.models import TelemetrySnapshot
+
 
 @pytest.fixture
 def mock_config_entry():
@@ -21,6 +27,7 @@ def mock_config_entry():
         entry_id="test_scpi_entry",
     )
 
+
 async def test_coordinator_update(hass: HomeAssistant, mock_config_entry: MockConfigEntry):
     mock_config_entry.add_to_hass(hass)
     coordinator = ScpiPsuCoordinator(hass, mock_config_entry)
@@ -33,12 +40,15 @@ async def test_coordinator_update(hass: HomeAssistant, mock_config_entry: MockCo
         status_text="Constant Voltage (CV)",
     )
 
-    with patch.object(coordinator.client, "poll_telemetry", new_callable=AsyncMock) as mock_poll, \
-         patch.object(coordinator.client, "get_output", new_callable=AsyncMock) as mock_outp, \
-         patch.object(coordinator.client, "get_raw_idn", new_callable=AsyncMock) as mock_idn, \
-         patch.object(coordinator.client, "get_config_registers", new_callable=AsyncMock) as mock_regs, \
-         patch.object(coordinator.client, "get_system_error", new_callable=AsyncMock) as mock_err:
-
+    with (
+        patch.object(coordinator.client, "poll_telemetry", new_callable=AsyncMock) as mock_poll,
+        patch.object(coordinator.client, "get_output", new_callable=AsyncMock) as mock_outp,
+        patch.object(coordinator.client, "get_raw_idn", new_callable=AsyncMock) as mock_idn,
+        patch.object(
+            coordinator.client, "get_config_registers", new_callable=AsyncMock
+        ) as mock_regs,
+        patch.object(coordinator.client, "get_system_error", new_callable=AsyncMock) as mock_err,
+    ):
         mock_poll.return_value = snap
         mock_outp.return_value = True
         mock_idn.return_value = "OWON,SPE6103,1234,V1.0"

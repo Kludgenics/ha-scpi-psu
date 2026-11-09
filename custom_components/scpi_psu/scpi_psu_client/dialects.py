@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import Protocol
 
 from .models import TelemetrySnapshot, parse_strict_float
@@ -81,10 +82,8 @@ class OwonScpiProfile:
 
         code: int | None = None
         if len(tokens) >= 7:
-            try:
+            with contextlib.suppress(ValueError):
                 code = int(float(tokens[6]))
-            except ValueError:
-                pass
 
         if code == 0:
             status_text = "Standby / Output Off"

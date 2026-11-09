@@ -89,9 +89,7 @@ def parse_idn(raw_idn: str | None) -> PsuIdentity:
     manufacturer = parts[0] if len(parts) >= 1 and parts[0] else "SCPI"
     model = parts[1] if len(parts) >= 2 and parts[1] else "PSU"
     serial_number = (
-        parts[2]
-        if len(parts) >= 3 and parts[2] and parts[2] not in ("0", "N/A", "NONE")
-        else None
+        parts[2] if len(parts) >= 3 and parts[2] and parts[2] not in ("0", "N/A", "NONE") else None
     )
     firmware = parts[3] if len(parts) >= 4 and parts[3] else None
 

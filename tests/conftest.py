@@ -10,14 +10,17 @@ if str(repo_root) not in sys.path:
 # Mock usb component SerialDevice / async_register_serial_port_scanner if missing from HA test env
 try:
     import homeassistant.components.usb as ha_usb
+
     if not hasattr(ha_usb, "SerialDevice"):
         from dataclasses import dataclass
+
         @dataclass
         class SerialDevice:
             device: str
             serial_number: str | None = None
             manufacturer: str | None = None
             description: str | None = None
+
         ha_usb.SerialDevice = SerialDevice
     if not hasattr(ha_usb, "async_register_serial_port_scanner"):
         ha_usb.async_register_serial_port_scanner = MagicMock()

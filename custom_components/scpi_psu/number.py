@@ -12,7 +12,11 @@ from homeassistant.components.number import (
     NumberMode,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfElectricCurrent, UnitOfElectricPotential
+from homeassistant.const import (
+    EntityCategory,
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -91,9 +95,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up SCPI PSU number entities."""
     coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        ScpiPsuNumber(coordinator, description) for description in NUMBERS
-    )
+    async_add_entities(ScpiPsuNumber(coordinator, description) for description in NUMBERS)
 
 
 class ScpiPsuNumber(CoordinatorEntity[ScpiPsuCoordinator], NumberEntity):

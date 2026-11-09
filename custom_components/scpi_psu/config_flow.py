@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
+
 import voluptuous as vol
-
-from serialx import SerialException
-
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -17,6 +14,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers import selector
+from serialx import SerialException
 
 from .const import (
     CONF_BAUDRATE,
@@ -58,7 +56,7 @@ def _clean_optional_float(val: Any) -> float | None:
     try:
         f = float(val)
         return f if f > 0 else None
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -73,9 +71,7 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
         self._baudrate: int = DEFAULT_BAUDRATE
         self._identity: PsuIdentity | None = None
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Step 1: Discover and select serial port and baudrate."""
         errors: dict[str, str] = {}
 
@@ -101,9 +97,7 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(
             {
                 vol.Required(CONF_SERIAL_PORT): selector.SerialPortSelector(),
-                vol.Required(
-                    CONF_BAUDRATE, default=DEFAULT_BAUDRATE
-                ): selector.NumberSelector(
+                vol.Required(CONF_BAUDRATE, default=DEFAULT_BAUDRATE): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=1200, max=921600, step=1, mode=selector.NumberSelectorMode.BOX
                     )
@@ -111,9 +105,7 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
 
-        return self.async_show_form(
-            step_id="user", data_schema=schema, errors=errors
-        )
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
     async def async_step_confirm(
         self, user_input: dict[str, Any] | None = None
@@ -149,9 +141,7 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_NAME,
                     description={"suggested_value": self._identity.default_title},
                 ): selector.TextSelector(),
-                vol.Required(
-                    CONF_PROFILE, default=PROFILE_AUTO
-                ): selector.SelectSelector(
+                vol.Required(CONF_PROFILE, default=PROFILE_AUTO): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=[
                             selector.SelectOptionDict(
@@ -214,9 +204,7 @@ class ScpiPsuOptionsFlow(OptionsFlow):
         """Initialize options flow."""
         self._entry = config_entry
 
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manage options."""
         errors: dict[str, str] = {}
         current_cfg = {**self._entry.data, **self._entry.options}

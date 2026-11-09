@@ -1,12 +1,10 @@
 import pytest
 from scpi_psu_client import (
+    OwonScpiProfile,
     parse_idn,
     parse_strict_float,
-    OwonScpiProfile,
-    StandardScpiProfile,
-    PROFILES,
-    PsuIdentity,
 )
+
 
 def test_parse_idn_owon():
     idn = "OWON,SPE6103,2138123,V1.2.3"
@@ -20,6 +18,7 @@ def test_parse_idn_owon():
     assert ident.hw_max_current == 10.0
     assert ident.default_title == "OWON SPE6103"
 
+
 def test_parse_idn_standard_generic():
     idn = "Rigol Technologies,DP832,DP8B1234567,00.01.14"
     ident = parse_idn(idn)
@@ -29,11 +28,13 @@ def test_parse_idn_standard_generic():
     assert ident.hw_max_voltage == 30.0
     assert ident.hw_max_current == 3.0
 
+
 def test_parse_strict_float():
     assert parse_strict_float("  12.345 \n") == 12.345
     assert parse_strict_float(None) is None
     assert parse_strict_float("") is None
     assert parse_strict_float("invalid") is None
+
 
 def test_owon_meas_all_info():
     profile = OwonScpiProfile()
@@ -51,9 +52,11 @@ def test_owon_meas_all_info():
     assert snap.output_enabled is True
     assert snap.fault_alarm is False
 
-import asyncio
+
 from unittest.mock import AsyncMock, MagicMock, patch
+
 from scpi_psu_client import ScpiPsuClient
+
 
 @pytest.mark.asyncio
 async def test_scpi_client_mock_telemetry():
@@ -70,6 +73,7 @@ async def test_scpi_client_mock_telemetry():
         assert snap.current == 2.5
         assert snap.power == 75.0
         assert snap.status_text == "Constant Voltage (CV)"
+
 
 @pytest.mark.asyncio
 async def test_scpi_client_mock_controls():

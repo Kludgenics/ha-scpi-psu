@@ -9,7 +9,6 @@ from typing import Any
 from serialx import Parity, SerialException, StopBits, open_serial_connection
 
 from .dialects import PROFILES, OwonScpiProfile, StandardScpiProfile
-from .exceptions import ScpiConnectionError, ScpiError, ScpiTimeoutError
 from .models import PsuIdentity, TelemetrySnapshot, parse_idn, parse_strict_float
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,7 +67,7 @@ class ScpiPsuClient:
             try:
                 self._writer.close()
                 await asyncio.wait_for(self._writer.wait_closed(), timeout=1.5)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._writer = None
             self._reader = None
@@ -115,7 +114,7 @@ class ScpiPsuClient:
                     break
         except TimeoutError:
             pass
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     async def query(self, cmd: str, expect_reply: bool = True) -> str | None:
@@ -219,7 +218,9 @@ class ScpiPsuClient:
         cmd = self.profile.format_set_voltage(value)
         async with self._lock:
             await self._query_unlocked(cmd, expect_reply=False)
-            v_set = parse_strict_float(await self._query_unlocked(self.profile.cmd_get_voltage_setpoint))
+            v_set = parse_strict_float(
+                await self._query_unlocked(self.profile.cmd_get_voltage_setpoint)
+            )
             return v_set if v_set is not None else value
 
     async def set_current(self, value: float) -> float | None:
@@ -227,7 +228,9 @@ class ScpiPsuClient:
         cmd = self.profile.format_set_current(value)
         async with self._lock:
             await self._query_unlocked(cmd, expect_reply=False)
-            c_set = parse_strict_float(await self._query_unlocked(self.profile.cmd_get_current_setpoint))
+            c_set = parse_strict_float(
+                await self._query_unlocked(self.profile.cmd_get_current_setpoint)
+            )
             return c_set if c_set is not None else value
 
     async def set_voltage_limit(self, value: float) -> float | None:
@@ -235,7 +238,9 @@ class ScpiPsuClient:
         cmd = self.profile.format_set_voltage_limit(value)
         async with self._lock:
             await self._query_unlocked(cmd, expect_reply=False)
-            v_lim = parse_strict_float(await self._query_unlocked(self.profile.cmd_get_voltage_limit))
+            v_lim = parse_strict_float(
+                await self._query_unlocked(self.profile.cmd_get_voltage_limit)
+            )
             return v_lim if v_lim is not None else value
 
     async def set_current_limit(self, value: float) -> float | None:
@@ -243,7 +248,9 @@ class ScpiPsuClient:
         cmd = self.profile.format_set_current_limit(value)
         async with self._lock:
             await self._query_unlocked(cmd, expect_reply=False)
-            c_lim = parse_strict_float(await self._query_unlocked(self.profile.cmd_get_current_limit))
+            c_lim = parse_strict_float(
+                await self._query_unlocked(self.profile.cmd_get_current_limit)
+            )
             return c_lim if c_lim is not None else value
 
     async def get_system_error(self) -> str | None:
@@ -267,10 +274,18 @@ class ScpiPsuClient:
             c_set = parse_strict_float(await self._query_unlocked(prof.cmd_get_current_setpoint))
 
         return {
-            "voltage_limit": round(v_lim, 3) if v_lim is not None and 0.0 <= v_lim <= max_v_hw else None,
-            "current_limit": round(c_lim, 3) if c_lim is not None and 0.0 <= c_lim <= max_i_hw else None,
-            "voltage_setpoint": round(v_set, 3) if v_set is not None and 0.0 <= v_set <= max_v_hw else None,
-            "current_setpoint": round(c_set, 3) if c_set is not None and 0.0 <= c_set <= max_i_hw else None,
+            "voltage_limit": round(v_lim, 3)
+            if v_lim is not None and 0.0 <= v_lim <= max_v_hw
+            else None,
+            "current_limit": round(c_lim, 3)
+            if c_lim is not None and 0.0 <= c_lim <= max_i_hw
+            else None,
+            "voltage_setpoint": round(v_set, 3)
+            if v_set is not None and 0.0 <= v_set <= max_v_hw
+            else None,
+            "current_setpoint": round(c_set, 3)
+            if c_set is not None and 0.0 <= c_set <= max_i_hw
+            else None,
         }
 
     async def clear_faults(self) -> None:

@@ -2,12 +2,46 @@ name: Validate
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  lint-and-test:
+    name: Lint & Test (Python 3.14)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system homeassistant pytest pytest-asyncio pytest-homeassistant-custom-component pyserial aiousbwatcher pytest-cov -e packages/scpi_psu_client
+
+      - name: Run Ruff Linter
+        run: uvx ruff check .
+
+      - name: Run Ruff Formatter Check
+        run: uvx ruff format --check .
+
+      - name: Run Pytest Suite with Coverage
+        run: pytest -v --cov=custom_components/scpi_psu --cov-report=term-missing
+
   hassfest:
     name: Hassfest Validation
     runs-on: ubuntu-latest
