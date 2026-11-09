@@ -286,39 +286,56 @@ async def test_client_telemetry_and_controls() -> None:
         mock_q.return_value = "UNKNOWN"
         assert await client.get_output() is None
 
-        # set_output branches
-        mock_q.side_effect = ["", "ON"]
+        def _dispatch_query(cmd: str, expect_reply: bool = True) -> str | None:
+            if not expect_reply:
+                if "OUTP ON" in cmd:
+                    state["OUTP?"] = "ON"
+                elif "OUTP OFF" in cmd:
+                    state["OUTP?"] = "OFF"
+                return ""
+            if cmd == "OUTP?":
+                return state.get("OUTP?", "ON")
+            if cmd in ("VOLT?", "VOLT:LIM?", "VOLT:PROT?"):
+                return state.get(cmd, "14.5")
+            if cmd in ("CURR?", "CURR:LIM?", "CURR:PROT?"):
+                return state.get(cmd, "3.2")
+            if cmd == "SYST:ERR?":
+                return state.get(cmd, "0,No error")
+            return None
+
+        state: dict[str, str] = {"OUTP?": "ON"}
+        mock_q.side_effect = _dispatch_query
+
         assert await client.set_output(True) is True
-        mock_q.side_effect = ["", "OFF"]
+        state["OUTP?"] = "OFF"
         assert await client.set_output(False) is False
-        mock_q.side_effect = ["", None]
-        assert await client.set_output(True) is True
 
         # set_voltage, set_current, set_voltage_limit, set_current_limit
-        mock_q.side_effect = ["", "14.5"]
+        state["VOLT?"] = "14.5"
         assert await client.set_voltage(14.5) == 14.5
-        mock_q.side_effect = ["", "3.2"]
+        state["CURR?"] = "3.2"
         assert await client.set_current(3.2) == 3.2
-        mock_q.side_effect = ["", "28.0"]
+        state[client.profile.cmd_get_voltage_limit] = "28.0"
         assert await client.set_voltage_limit(28.0) == 28.0
-        mock_q.side_effect = ["", "5.5"]
+        state[client.profile.cmd_get_current_limit] = "5.5"
         assert await client.set_current_limit(5.5) == 5.5
 
         # get_system_error, get_setpoints, get_config_registers, clear_faults
-        mock_q.side_effect = None
-        mock_q.return_value = "0,No error"
+        state["SYST:ERR?"] = "0,No error"
         assert await client.get_system_error() == "0,No error"
-        mock_q.return_value = "ON"
+        state["SYST:ERR?"] = "ON"
         assert await client.get_system_error() is None
 
-        mock_q.side_effect = ["12.0", "2.0"]
+        state["VOLT?"] = "12.0"
+        state["CURR?"] = "2.0"
         setpoints = await client.get_setpoints()
         assert setpoints == {
             "voltage_setpoint": 12.0,
             "current_setpoint": 2.0,
         }
 
-        mock_q.side_effect = ["30.0", "5.0", "12.0", "2.0"]
+        state[client.profile.cmd_get_voltage_limit] = "30.0"
+        state[client.profile.cmd_get_current_limit] = "5.0"
         regs = await client.get_config_registers()
         assert regs == {
             "voltage_limit": 30.0,

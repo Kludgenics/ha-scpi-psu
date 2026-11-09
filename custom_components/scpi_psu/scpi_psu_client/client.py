@@ -248,9 +248,10 @@ class ScpiPsuClient:
                 if parsed is not None:
                     return parsed
                 # Fallback: select channel then query OUTP?
-                await self._query_unlocked(
-                    self.profile.format_select_channel(channel), expect_reply=False
-                )
+                if channel > 1:
+                    await self._query_unlocked(
+                        self.profile.format_select_channel(channel), expect_reply=False
+                    )
             return parse_output_state(await self._query_unlocked("OUTP?"))
 
     async def set_output(self, enabled: bool, channel: int = 1) -> bool:

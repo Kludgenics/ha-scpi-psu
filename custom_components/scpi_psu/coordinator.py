@@ -144,19 +144,18 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
     def active_fields(self) -> set[str]:
         """Compute the union of fields actively needed by enabled entities."""
         if self._registered_fields:
-            fields = set(self._registered_fields.keys())
-        else:
-            fields = {
-                FIELD_VOLTAGE,
-                FIELD_CURRENT,
-                FIELD_POWER,
-                FIELD_OUTPUT_ENABLED,
-                FIELD_STATUS_TEXT,
-                FIELD_FAULT_ALARM,
-                FIELD_OVP_TRIPPED,
-                FIELD_OCP_TRIPPED,
-                FIELD_OPP_TRIPPED,
-            }
+            return set(self._registered_fields.keys())
+        fields = {
+            FIELD_VOLTAGE,
+            FIELD_CURRENT,
+            FIELD_POWER,
+            FIELD_OUTPUT_ENABLED,
+            FIELD_STATUS_TEXT,
+            FIELD_FAULT_ALARM,
+            FIELD_OVP_TRIPPED,
+            FIELD_OCP_TRIPPED,
+            FIELD_OPP_TRIPPED,
+        }
         if self.identity.has_dmm:
             fields.add(FIELD_DMM)
         return fields
@@ -359,15 +358,10 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
 
     async def async_set_output(self, enabled: bool, channel: int = 1) -> None:
         actual = await self.client.set_output(enabled, channel=channel)
-        ch_data = self._state.channels.setdefault(channel, ChannelTelemetry(channel=channel))
-        ch_data.output_enabled = actual
-        if channel == 1:
-            self._state.output_enabled = actual
-        self._sync_all_outputs_enabled()
         snap = await self.client.poll_telemetry(channel=channel)
         if snap is not None:
             self._apply_telemetry(snap)
-        # Ensure the verified actual output state is preserved even if telemetry is static or delayed
+        ch_data = self._state.channels.setdefault(channel, ChannelTelemetry(channel=channel))
         ch_data.output_enabled = actual
         if channel == 1:
             self._state.output_enabled = actual
@@ -377,11 +371,6 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
     async def async_set_all_outputs(self, enabled: bool) -> None:
         """Atomically toggle all channel outputs on a multi-channel device."""
         actual = await self.client.set_all_outputs(enabled)
-        for ch in range(1, self.identity.channels + 1):
-            ch_data = self._state.channels.setdefault(ch, ChannelTelemetry(channel=ch))
-            ch_data.output_enabled = actual
-        self._state.output_enabled = actual
-        self._state.all_outputs_enabled = actual
         snap = await self.client.poll_telemetry(channel=1)
         if snap is not None:
             self._apply_telemetry(snap)
