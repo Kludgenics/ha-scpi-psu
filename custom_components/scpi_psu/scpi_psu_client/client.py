@@ -58,6 +58,11 @@ class ScpiPsuClient:
         async with self._lock:
             await self._close_transport_unlocked()
 
+    async def reconnect(self) -> None:
+        """Force transport disconnect to allow clean reconnection on next call."""
+        async with self._lock:
+            await self._close_transport_unlocked()
+
     async def _close_transport_unlocked(self) -> None:
         if self._writer is not None:
             try:
@@ -148,6 +153,11 @@ class ScpiPsuClient:
             await self._close_transport_unlocked()
             return None
 
+    async def get_raw_idn(self) -> str | None:
+        """Query raw *IDN? string under lock."""
+        async with self._lock:
+            return await self._query_unlocked("*IDN?")
+
     async def probe_identity(self) -> PsuIdentity:
         """Probe *IDN? identity under lock."""
         async with self._lock:
@@ -235,6 +245,33 @@ class ScpiPsuClient:
             await self._query_unlocked(cmd, expect_reply=False)
             c_lim = parse_strict_float(await self._query_unlocked(self.profile.cmd_get_current_limit))
             return c_lim if c_lim is not None else value
+
+    async def get_system_error(self) -> str | None:
+        """Query SYST:ERR? under lock."""
+        async with self._lock:
+            err = await self._query_unlocked("SYST:ERR?")
+            if err and err not in ("ON", "OFF") and err.count(",") <= 1:
+                return err
+            return None
+
+    async def get_config_registers(self) -> dict[str, float | None]:
+        """Query setpoints and limits under lock."""
+        prof = self.profile
+        max_v_hw = self.identity.hw_max_voltage * 1.15
+        max_i_hw = self.identity.hw_max_current * 1.15
+
+        async with self._lock:
+            v_lim = parse_strict_float(await self._query_unlocked(prof.cmd_get_voltage_limit))
+            c_lim = parse_strict_float(await self._query_unlocked(prof.cmd_get_current_limit))
+            v_set = parse_strict_float(await self._query_unlocked(prof.cmd_get_voltage_setpoint))
+            c_set = parse_strict_float(await self._query_unlocked(prof.cmd_get_current_setpoint))
+
+        return {
+            "voltage_limit": round(v_lim, 3) if v_lim is not None and 0.0 <= v_lim <= max_v_hw else None,
+            "current_limit": round(c_lim, 3) if c_lim is not None and 0.0 <= c_lim <= max_i_hw else None,
+            "voltage_setpoint": round(v_set, 3) if v_set is not None and 0.0 <= v_set <= max_v_hw else None,
+            "current_setpoint": round(c_set, 3) if c_set is not None and 0.0 <= c_set <= max_i_hw else None,
+        }
 
     async def clear_faults(self) -> None:
         """Clear device protection errors (*CLS)."""

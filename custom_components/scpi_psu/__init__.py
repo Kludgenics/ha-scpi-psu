@@ -57,17 +57,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up SCPI Power Supply from a config entry."""
-    # Migrate legacy 'serial_url' key to standard 'serial_port' key recognized by HA's usb consumer tracker
-    if CONF_SERIAL_PORT not in entry.data and "serial_url" in entry.data:
-        new_data = {**entry.data, CONF_SERIAL_PORT: entry.data["serial_url"]}
-        new_data.pop("serial_url", None)
-        new_options = {**entry.options}
-        if "serial_url" in new_options:
-            new_options[CONF_SERIAL_PORT] = new_options.pop("serial_url")
-        hass.config_entries.async_update_entry(
-            entry, data=new_data, options=new_options
-        )
-
     coordinator = ScpiPsuCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 

@@ -7,7 +7,7 @@ import logging
 from typing import Any
 import voluptuous as vol
 
-from serialx import Parity, SerialException, StopBits, open_serial_connection
+from serialx import SerialException
 
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -34,45 +34,21 @@ from .const import (
     PROFILE_OWON,
     PROFILE_STANDARD,
 )
-from .profiles import PsuIdentity, parse_idn
+from .scpi_psu_client import PsuIdentity, ScpiPsuClient
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def _async_probe_psu(serial_url: str, baudrate: int) -> PsuIdentity:
-    """Open serialx connection, query *IDN?, and return parsed PsuIdentity."""
-    reader, writer = await asyncio.wait_for(
-        open_serial_connection(
-            url=serial_url,
-            baudrate=baudrate,
-            bytesize=8,
-            parity=Parity.NONE,
-            stopbits=StopBits.ONE,
-            xonxoff=False,
-            rtscts=False,
-            dsrdtr=False,
-        ),
-        timeout=4.0,
-    )
+    """Probe SCPI PSU identity using ScpiPsuClient."""
+    client = ScpiPsuClient(serial_url=serial_url, baudrate=baudrate)
     try:
-        await asyncio.sleep(0.15)
-        try:
-            while await asyncio.wait_for(reader.read(512), timeout=0.03):
-                pass
-        except TimeoutError:
-            pass
-
-        writer.write(b"*IDN?\n")
-        await asyncio.wait_for(writer.drain(), timeout=1.5)
-        raw = await asyncio.wait_for(reader.readline(), timeout=2.0)
-        idn_str = raw.decode("utf-8", errors="ignore").strip() if raw else ""
-        return parse_idn(idn_str)
+        await client.connect()
+        if not client.is_connected:
+            raise SerialException(f"Unable to establish serial connection to {serial_url}")
+        return await client.probe_identity()
     finally:
-        try:
-            writer.close()
-            await asyncio.wait_for(writer.wait_closed(), timeout=1.5)
-        except Exception:  # noqa: BLE001
-            pass
+        await client.close()
 
 
 def _clean_optional_float(val: Any) -> float | None:
@@ -244,7 +220,7 @@ class ScpiPsuOptionsFlow(OptionsFlow):
         """Manage options."""
         errors: dict[str, str] = {}
         current_cfg = {**self._entry.data, **self._entry.options}
-        current_port = current_cfg.get(CONF_SERIAL_PORT) or current_cfg.get("serial_url", "")
+        current_port = current_cfg.get(CONF_SERIAL_PORT, "")
         if user_input is not None:
             serial_url = user_input[CONF_SERIAL_PORT].strip()
             baudrate = int(user_input[CONF_BAUDRATE])
@@ -275,7 +251,7 @@ class ScpiPsuOptionsFlow(OptionsFlow):
 
         schema_dict: dict[Any, Any] = {
             vol.Required(
-                CONF_SERIAL_PORT, default=cfg.get(CONF_SERIAL_PORT) or cfg.get("serial_url", "")
+                CONF_SERIAL_PORT, default=cfg.get(CONF_SERIAL_PORT, "")
             ): selector.SerialPortSelector(),
             vol.Required(
                 CONF_BAUDRATE, default=int(cfg.get(CONF_BAUDRATE, DEFAULT_BAUDRATE))

@@ -38,7 +38,7 @@ class TelemetrySnapshot:
     opp_tripped: bool | None = None
     status_code: int | None = None
     status_text: str = "Active"
-    fault_alarm: bool = False
+    fault_alarm: bool | None = False
     output_enabled: bool | None = None
 
 
