@@ -347,3 +347,107 @@ async def test_simulated_fault_trip_and_clear(hass: HomeAssistant) -> None:
             assert await async_unload_entry(hass, entry) is True
     finally:
         await bridge.stop()
+
+
+@pytest.mark.enable_socket
+async def test_simulated_power_blip_fault_and_reboot_auto_recovery(hass: HomeAssistant) -> None:
+    """Document and verify complete cycle: misframed reply -> trip -> power cycle -> boot noise -> full recovery."""
+    phase = 0
+    boot_noise = (
+        "main.c(879): CPU,CLK=120000000Hz\r\n"
+        "main.c(880): Normal startup,Table=368,TXT=1308\r\n"
+        "main.c(881): Date of build:(Apr 15 2025) Time: (14:06:24)\r\n"
+        "main.c(882): LCD ID=0xff858552,MADCTL=0x60\r\n"
+        "compensate.c(348):CURR ADC:1075838976,1610612736\r\n"
+    )
+
+    setup_done = False
+
+    def _hook(cmd: str) -> str | None:
+        nonlocal phase
+        if not setup_done:
+            return None
+        if cmd == "CURR?" and phase == 0:
+            phase = 1
+            return "5.455"
+        if cmd == "SYST:ERR?" and phase == 1:
+            phase = 2
+            # Delayed setpoint readback arrives during SYST:ERR? query
+            return "5.455"
+        if cmd == "*IDN?" and phase == 2:
+            phase = 3
+            # Hardware is physically unpowered or mid-reboot
+            raise TimeoutError("Device off during reboot")
+        if cmd == "*IDN?" and phase >= 3:
+            # Hardware finishes booting, emits boot noise followed by identity
+            return f"{boot_noise}OWON,SPE6103,2138123,V1.2.3"
+        return None
+
+    bridge = PyVisaSimTcpBridge("ASRL1::INSTR", SIM_YAML, custom_query_hook=_hook)
+    socket_url = await bridge.start()
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="OWON SPE6103 Power Cycle Recovery Test",
+        data={
+            CONF_SERIAL_PORT: socket_url,
+            CONF_BAUDRATE: 115200,
+        },
+        entry_id="test_sim_power_cycle_recovery",
+    )
+    entry.add_to_hass(hass)
+
+    from homeassistant.config_entries import ConfigEntryState
+
+    entry._async_set_state(hass, ConfigEntryState.SETUP_IN_PROGRESS, None)
+
+    try:
+        with (
+            patch(
+                "custom_components.scpi_psu.ScpiPsuCoordinator",
+                side_effect=lambda h, e: ScpiPsuCoordinator(
+                    h, e, command_delay=0.0, write_delay=0.0
+                ),
+            ),
+            patch.object(hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock),
+            patch.object(
+                hass.config_entries,
+                "async_unload_platforms",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            assert await async_setup_entry(hass, entry) is True
+            coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
+            setup_done = True
+
+            # 1. Device is initially online and operational
+            assert coordinator.data.connected is True
+            assert coordinator.data.ch1.voltage == 12.0
+
+            # 2. Misaligned reply arrives during SYST:ERR? -> triggers session invalidation
+            coordinator._last_full_poll = 0.0
+            await coordinator.async_refresh()
+
+            # 3. First attempt to poll fails because device is rebooting (timeout)
+            await coordinator.async_refresh()
+            assert coordinator._consecutive_failures == 1
+
+            # 4. Successive failures trip unresponsive & disconnect thresholds (consecutive_failures >= 3 -> client.close())
+            await coordinator.async_refresh()
+            assert coordinator.data.ch1.status_text == "Unresponsive / Power Lost"
+            assert coordinator._consecutive_failures == 2
+
+            await coordinator.async_refresh()
+            assert coordinator._consecutive_failures == 3
+
+            # 5. Device finishes rebooting, emits boot debug noise, and automatically recovers
+            await coordinator.async_refresh()
+            assert coordinator.data.connected is True
+            assert coordinator.data.ch1.voltage == 12.0
+            assert coordinator.data.ch1.status_text == "Constant Voltage (CV)"
+            assert coordinator._consecutive_failures == 0
+
+            assert await async_unload_entry(hass, entry) is True
+    finally:
+        await bridge.stop()

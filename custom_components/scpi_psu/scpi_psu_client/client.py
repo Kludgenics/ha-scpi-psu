@@ -116,6 +116,8 @@ class ScpiPsuClient:
     async def close(self) -> None:
         async with self._lock:
             await self._close_transport_unlocked()
+            self._needs_resynchronization = False
+            self._pending_identity_replies = 0
 
     async def _close_transport_unlocked(self) -> None:
         if self._writer is not None:
