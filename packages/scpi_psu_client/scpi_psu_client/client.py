@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from serialx import Parity, SerialException, StopBits, open_serial_connection
@@ -127,6 +127,30 @@ class ScpiPsuClient:
             self._writer = None
             self._reader = None
 
+    def _flush_rx_unlocked(self) -> None:
+        """Purge unread characters from transport and StreamReader internal buffer."""
+        # 1. Reset underlying hardware/OS serial port read buffer if supported
+        if self._writer is not None:
+            transport = getattr(self._writer, "transport", None)
+            if transport is not None:
+                # serialx BaseSerialTransport / PosixSerialTransport
+                serial_obj = getattr(transport, "serial", None) or getattr(
+                    transport, "_serial", None
+                )
+                if serial_obj is not None:
+                    reset_fn = getattr(serial_obj, "reset_read_buffer", None) or getattr(
+                        serial_obj, "reset_input_buffer", None
+                    )
+                    if callable(reset_fn):
+                        with suppress(Exception):
+                            reset_fn()
+
+        # 2. Clear StreamReader's in-memory buffer
+        if self._reader is not None:
+            buf = getattr(self._reader, "_buffer", None)
+            if buf is not None and hasattr(buf, "clear"):
+                buf.clear()
+
     async def _ensure_connected_unlocked(self) -> bool:
         if self.is_connected:
             return True
@@ -149,6 +173,7 @@ class ScpiPsuClient:
             _LOGGER.info("Connected to SCPI PSU at %s", self.serial_url)
             if self.write_delay > 0:
                 await asyncio.sleep(self.write_delay)
+            self._flush_rx_unlocked()
             if self._needs_resynchronization:
                 if not await self._resynchronize_unlocked():
                     await self._close_transport_unlocked()

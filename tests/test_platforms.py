@@ -174,6 +174,8 @@ async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
     assert bin_map["connected"].is_on is True
     assert bin_map["fault"].is_on is False
     assert bin_map["ocp_tripped"].is_on is True
+    assert bin_map["opp_tripped"].name == "Over-temperature Protection (OTP)"
+    assert bin_map["opp_tripped"].unique_id == f"{entry.entry_id}_opp_tripped"
 
     for ent in added:
         await ent.async_will_remove_from_hass()

@@ -77,7 +77,7 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
     ),
     ScpiPsuBinarySensorEntityDescription(
         key="opp_tripped",
-        name="Overpower Protection (OPP)",
+        name="Over-temperature Protection (OTP)",
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda d: d.ch1.opp_tripped,

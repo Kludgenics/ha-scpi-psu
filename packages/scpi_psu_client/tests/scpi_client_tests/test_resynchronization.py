@@ -116,3 +116,28 @@ async def test_unknown_identity_recovery_does_not_accept_telemetry_as_marker() -
         assert await client.query("VOLT?") is None
         assert await client.query("VOLT?") == "4.000"
     await client.close()
+
+
+async def test_boot_debug_text_flushed_on_reconnect_after_trip() -> None:
+    """Verify boot text emitted by hardware power-cycle is purged during resync."""
+    client = ScpiPsuClient("socket://bridge:4001", initial_idn=IDN, command_delay=0, write_delay=0)
+    first = connection([TimeoutError()])
+    reboot_and_sync = connection(
+        [
+            b"[BOOT] Power supply init...\n",
+            b"HW Rev: 2.1, Cal: OK\n",
+            (IDN + "\n").encode(),
+            b"12.345\n",
+        ]
+    )
+    with patch(
+        "scpi_psu_client.client.open_serial_connection",
+        new_callable=AsyncMock,
+        side_effect=[first, reboot_and_sync],
+    ):
+        assert await client.query("VOLT?") is None
+        assert not client.is_connected
+        # Upon next query, reconnects, flushes buffer, resyncs via *IDN?, and VOLT? gets 12.345
+        assert await client.query("VOLT?") == "12.345"
+        assert client.is_connected
+    await client.close()

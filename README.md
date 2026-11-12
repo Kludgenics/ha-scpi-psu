@@ -27,13 +27,13 @@ The integration automatically detects the device profile from the IEEE 488.2 `*I
 - **OWON & Rebrands** (`owon` profile):
   - **Brands**: OWON, and rebadges / clones (Abestop, Kiprim, Multicomp Pro).
   - **Models**: `SPE` series (`SPE3103`, `SPE6103`, `SPE6053`), `SPM` series with integrated DMM (`SPM3103`, `SPM6103`), multi-channel `ODP` series (`ODP6062`), `P4000` series (`P4603`), and clones (`AT6301`, `AT6302`, `DC310`, `DC605`, `MP7200xx`).
-  - **Protocol Features**: Single-transaction composite telemetry query (`MEAS:ALL:INFO?`), hardware OVP/OCP/OPP trip flags, integrated DMM readback (`:READ?` on SPM series), and output state reporting.
+  - **Protocol Features**: Single-transaction composite telemetry query (`MEAS:ALL:INFO?`), hardware OVP/OCP/over-temperature trip flags, integrated DMM readback (`:READ?` on SPM series), and output state reporting.
 
 ---
 
 ## Device Feature Support Matrix
 
-| Manufacturer / Series | Example Models | Dialect Profile | Channels | Composite Telemetry (`MEAS:ALL:INFO?`) | Output Toggle (`OUTP`) | V / I Setpoints (`VOLT` / `CURR`) | OVP / OCP Protection Limits | Hardware Trip Flags (OVP/OCP/OPP) | Multimeter / DMM | Sub-Device Hierarchy |
+| Manufacturer / Series | Example Models | Dialect Profile | Channels | Composite Telemetry (`MEAS:ALL:INFO?`) | Output Toggle (`OUTP`) | V / I Setpoints (`VOLT` / `CURR`) | OVP / OCP Protection Limits | Hardware Trip Flags | Multimeter / DMM | Sub-Device Hierarchy |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Rigol** | DP832, DP832A, DP831A, DP711 | `standard` | 1–3 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | — | Chassis + Channels 1..N |
 | **Siglent** | SPD3303X, SPD1168X, SPD1305X | `standard` | 1–3 | — (discrete) | ✅ | ✅ | ✅ (`VOLT:PROT`) | — | — | Chassis + Channels 1..N |
@@ -55,7 +55,7 @@ The integration automatically detects the device profile from the IEEE 488.2 `*I
   - Automatically queries `*IDN?` during setup to identify **Manufacturer**, **Model**, **Serial Number**, and **Firmware Version**.
   - Default device name is `<Manufacturer> <Model>` (e.g., `Rigol DP832` or `Abestop AT6301`) unless overridden during setup.
 - **Dual Dialect Profiles**:
-  - **OWON Profile**: Uses composite telemetry (`MEAS:ALL:INFO?`) returning voltage, current, power, OVP/OCP/OPP limits, and operating modes in a single transaction.
+  - **OWON Profile**: Uses composite telemetry (`MEAS:ALL:INFO?`) returning voltage, current, power, OVP/OCP/over-temperature flags, and operating modes in a single transaction.
   - **Standard SCPI Profile**: Standard IEEE 488.2 queries (`MEAS:VOLT?`, `MEAS:CURR?`, `MEAS:POW?`, `VOLT:PROT`, `CURR:PROT`).
 - **Hardware Safety Clamps**:
   - Optional **Safety Max Voltage Clamp** and **Safety Max Current Clamp** in Config and Options flows.
