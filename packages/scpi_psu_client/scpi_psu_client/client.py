@@ -227,6 +227,8 @@ class ScpiPsuClient:
                     if not raw:
                         return False
                     line = raw.decode("utf-8", errors="ignore").strip()
+                    if not line:
+                        continue
                     if self._is_identity_reply(line):
                         self._pending_identity_replies -= 1
                         if self._pending_identity_replies == 0:
@@ -261,10 +263,20 @@ class ScpiPsuClient:
                 if self.write_delay > 0:
                     await asyncio.sleep(self.write_delay)
                 return ""
-            raw_line = await asyncio.wait_for(self._reader.readline(), timeout=1.8)
-            if not raw_line:
+
+            raw_line = b""
+            for _ in range(16):
+                raw = await asyncio.wait_for(self._reader.readline(), timeout=1.8)
+                if not raw:
+                    await self._invalidate_session_unlocked()
+                    return None
+                if raw.strip():
+                    raw_line = raw
+                    break
+            else:
                 await self._invalidate_session_unlocked()
                 return None
+
             line = raw_line.decode("utf-8", errors="ignore").strip()
             if identity_query:
                 if not self._is_structured_identity(line):

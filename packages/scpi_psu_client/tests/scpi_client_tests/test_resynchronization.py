@@ -124,10 +124,13 @@ async def test_boot_debug_text_flushed_on_reconnect_after_trip() -> None:
     first = connection([TimeoutError()])
     reboot_and_sync = connection(
         [
-            b"[BOOT] Power supply init...\n",
-            b"HW Rev: 2.1, Cal: OK\n",
-            (IDN + "\n").encode(),
-            b"12.345\n",
+            b"main.c(879): CPU,CLK=120000000Hz\r\n",
+            b"main.c(880): Normal startup,Table=368,TXT=1308\r\n",
+            b"main.c(881): Date of build:(Apr 15 2025) Time: (14:06:24)\r\n",
+            b"main.c(882): LCD ID=0xff858552,MADCTL=0x60\r\n",
+            b"compensate.c(348):CURR ADC:1075838976,1610612736\r\n",
+            (IDN + "\r\n").encode(),
+            b"12.345\r\n",
         ]
     )
     with patch(
@@ -139,5 +142,46 @@ async def test_boot_debug_text_flushed_on_reconnect_after_trip() -> None:
         assert not client.is_connected
         # Upon next query, reconnects, flushes buffer, resyncs via *IDN?, and VOLT? gets 12.345
         assert await client.query("VOLT?") == "12.345"
+        assert client.is_connected
+    await client.close()
+
+
+async def test_boot_crud_and_empty_lines_during_normal_exchange() -> None:
+    """Verify that stray empty lines and noise between queries do not invalidate session."""
+    client = ScpiPsuClient("socket://bridge:4001", initial_idn=IDN, command_delay=0, write_delay=0)
+    conn = connection([b"\r\n", b"\n", b"12.345\r\n", b"\r\n", b"1.234\r\n"])
+    with patch(
+        "scpi_psu_client.client.open_serial_connection",
+        new_callable=AsyncMock,
+        return_value=conn,
+    ):
+        assert await client.query("VOLT?") == "12.345"
+        assert await client.query("CURR?") == "1.234"
+        assert client.is_connected
+    await client.close()
+
+
+async def test_midline_fragment_across_packets_reassembles_and_recovers() -> None:
+    """Verify fragmented TCP packets delivering mid-line chunks are reassembled and buffered."""
+    client = ScpiPsuClient("socket://bridge:4001", initial_idn=IDN, command_delay=0, write_delay=0)
+    reader = asyncio.StreamReader()
+    writer = MagicMock()
+    writer.is_closing.return_value = False
+    writer.drain = AsyncMock()
+    writer.wait_closed = AsyncMock()
+
+    with patch(
+        "scpi_psu_client.client.open_serial_connection",
+        new_callable=AsyncMock,
+        return_value=(reader, writer),
+    ):
+        await client.connect()
+        # Feed initial mid-line chunk (segment 1) after connection established
+        reader.feed_data(b"Abestop,AT6301,2532")
+        # Now feed remaining chunk with terminator (segment 2)
+        reader.feed_data(b"0554,FV:V6.0.0\r\n")
+        ident = await client.probe_identity()
+        assert ident.raw_idn == "Abestop,AT6301,25320554,FV:V6.0.0"
+        assert ident.model == "AT6301"
         assert client.is_connected
     await client.close()
