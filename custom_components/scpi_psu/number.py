@@ -19,20 +19,17 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import ScpiPsuCoordinator, ScpiPsuData
+from .coordinator import ScpiDescriptionMixin, ScpiPsuCoordinator, ScpiPsuDescribedEntity
 
 
 @dataclass(frozen=True, kw_only=True)
-class ScpiPsuNumberEntityDescription(NumberEntityDescription):
+class ScpiPsuNumberEntityDescription(ScpiDescriptionMixin[float | None], NumberEntityDescription):
     """Describes SCPI PSU number entity."""
 
-    value_fn: Callable[[ScpiPsuData], float | None]
     max_fn: Callable[[ScpiPsuCoordinator], float]
     set_fn: Callable[[ScpiPsuCoordinator, float], Awaitable[None]]
-    is_supported_fn: Callable[[ScpiPsuCoordinator], bool] = lambda _: True
 
 
 NUMBERS: tuple[ScpiPsuNumberEntityDescription, ...] = (
@@ -129,21 +126,17 @@ async def async_setup_entry(
         entry.async_on_unload(stop_discovery)
 
 
-class ScpiPsuNumber(CoordinatorEntity[ScpiPsuCoordinator], NumberEntity):
+class ScpiPsuNumber(ScpiPsuDescribedEntity[ScpiPsuNumberEntityDescription], NumberEntity):
     """Representation of an SCPI PSU number control."""
 
     entity_description: ScpiPsuNumberEntityDescription
-    _attr_has_entity_name = True
 
     def __init__(
         self,
         coordinator: ScpiPsuCoordinator,
         description: ScpiPsuNumberEntityDescription,
     ) -> None:
-        super().__init__(coordinator)
-        self.entity_description = description
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
-        self._attr_device_info = coordinator.channel_device_info(1)
+        super().__init__(coordinator, description)
         self._attr_native_max_value = description.max_fn(coordinator)
 
     @property

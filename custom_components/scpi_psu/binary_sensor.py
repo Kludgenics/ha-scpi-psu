@@ -13,11 +13,14 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import ChildDeviceInfo, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
-from .coordinator import ScpiPsuCoordinator, ScpiPsuData, ScpiPsuEntity
+from .coordinator import (
+    ScpiDescriptionMixin,
+    ScpiPsuCoordinator,
+    ScpiPsuDescribedEntity,
+    setup_described_entities,
+)
 from .scpi_psu_client import (
     FIELD_FAULT_ALARM,
     FIELD_OCP_TRIPPED,
@@ -27,16 +30,13 @@ from .scpi_psu_client import (
 
 
 @dataclass(frozen=True, kw_only=True)
-class ScpiPsuBinarySensorEntityDescription(BinarySensorEntityDescription):
+class ScpiPsuBinarySensorEntityDescription(
+    ScpiDescriptionMixin[bool | None], BinarySensorEntityDescription
+):
     """Describes SCPI PSU binary sensor."""
 
-    value_fn: Callable[[ScpiPsuData], bool | None]
-    measurement_field: str | None = None
     is_supported_fn: Callable[[ScpiPsuCoordinator], bool] = lambda coord: (
         coord.profile.reports_status_in_telemetry
-    )
-    device_info_fn: Callable[[ScpiPsuCoordinator], DeviceInfo | ChildDeviceInfo] = lambda coord: (
-        coord.channel_device_info(1)
     )
 
 
@@ -93,32 +93,15 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up SCPI PSU binary sensors."""
-    coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
-            ScpiPsuBinarySensor(coordinator, description)
-            for description in BINARY_SENSORS
-            if description.is_supported_fn(coordinator)
-        ]
-    )
+    setup_described_entities(hass, entry, async_add_entities, BINARY_SENSORS, ScpiPsuBinarySensor)
 
 
-class ScpiPsuBinarySensor(ScpiPsuEntity, BinarySensorEntity):
+class ScpiPsuBinarySensor(
+    ScpiPsuDescribedEntity[ScpiPsuBinarySensorEntityDescription], BinarySensorEntity
+):
     """Representation of an SCPI PSU binary sensor."""
 
     entity_description: ScpiPsuBinarySensorEntityDescription
-
-    def __init__(
-        self,
-        coordinator: ScpiPsuCoordinator,
-        description: ScpiPsuBinarySensorEntityDescription,
-    ) -> None:
-        super().__init__(coordinator)
-        self.entity_description = description
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
-        self._attr_device_info = description.device_info_fn(coordinator)
-        if description.measurement_field:
-            self._tracked_fields = ((description.measurement_field, 1),)
 
     @property
     def is_on(self) -> bool | None:

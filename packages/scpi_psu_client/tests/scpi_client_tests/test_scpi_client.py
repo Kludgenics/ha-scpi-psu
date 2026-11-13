@@ -123,15 +123,12 @@ def test_owon_profile_commands_and_parsing() -> None:
     assert snap_other is not None
     assert snap_other.status_text == "Active"
 
-    # Invalid cases
     assert profile.parse_composite_telemetry(None) is None
     assert profile.parse_composite_telemetry("") is None
-    assert profile.parse_composite_telemetry("12.0, 1.0, 12.0") is None  # Too few tokens
-    assert profile.parse_composite_telemetry("bad, 1.0, 12.0, 0, 0, 0") is None  # Non-float
-    assert profile.parse_composite_telemetry("999.0, 1.0, 12.0, 0, 0, 0") is None  # Out of range V
-    assert (
-        profile.parse_composite_telemetry("12.0, 1.0, 12.0, BAD_FLAG, 0, 0") is None
-    )  # Bad OVP flag
+    assert profile.parse_composite_telemetry("12.0, 1.0, 12.0") is None
+    assert profile.parse_composite_telemetry("bad, 1.0, 12.0, 0, 0, 0") is None
+    assert profile.parse_composite_telemetry("999.0, 1.0, 12.0, 0, 0, 0") is None
+    assert profile.parse_composite_telemetry("12.0, 1.0, 12.0, BAD_FLAG, 0, 0") is None
 
 
 def test_standard_profile_commands() -> None:
@@ -165,37 +162,30 @@ async def test_client_transport_lifecycle_and_queries() -> None:
         await client.connect()
         assert client.is_connected is True
 
-        # Calling connect again reuses existing open writer
         await client.connect()
         assert client.is_connected is True
 
-        # Probe identity
         ident = await client.probe_identity()
         assert ident.manufacturer == "OWON"
         assert client.profile.key == "owon"
 
-        # Query with expect_reply=True
         mock_reader.readline.return_value = b"12.500\n"
         reply = await client.query("VOLT?")
         assert reply == "12.500"
 
-        # Query with expect_reply=False
         reply_no_wait = await client.query("*CLS", expect_reply=False)
         assert reply_no_wait == ""
 
-        # EOF on readline closes transport
         mock_reader.readline.return_value = b""
         eof_reply = await client.query("VOLT?")
         assert eof_reply is None
         assert client.is_connected is False
 
-        # Reconnect and test TimeoutError on readline
         mock_reader.readline.side_effect = TimeoutError()
         timeout_reply = await client.query("VOLT?")
         assert timeout_reply is None
         assert client.is_connected is False
 
-        # SerialException on write/readline closes transport
         mock_reader.readline.side_effect = SerialException("broken pipe")
         err_reply = await client.query("VOLT?")
         assert err_reply is None
@@ -587,12 +577,10 @@ async def test_client_telemetry_and_controls() -> None:
         assert snap.ovp_tripped is False
         assert snap.ocp_tripped is False
 
-    # Invalid V returns None
     await client.close()
     with mock_serial_responder(lambda cmd: "ON" if "OUTP" in cmd else "bad"):
         assert await client.poll_telemetry() is None
 
-    # Invalid I returns None
     await client.close()
     with mock_serial_responder(
         lambda cmd: "999.0" if "CURR" in cmd else ("10.0" if "VOLT" in cmd else "ON")
@@ -631,17 +619,15 @@ async def test_client_telemetry_and_controls() -> None:
         assert await client.set_output(True) is True
         assert await client.set_output(False) is False
 
-        # set_voltage, set_current, set_voltage_limit, set_current_limit
         state["VOLT?"] = "14.5"
         assert await client.set_voltage(14.5) == 14.5
         state["CURR?"] = "3.2"
         assert await client.set_current(3.2) == 3.2
-        state[client.profile.cmd_get_voltage_limit] = "28.0"
+        state["VOLT:PROT?"] = "28.0"
         assert await client.set_voltage_limit(28.0) == 28.0
-        state[client.profile.cmd_get_current_limit] = "5.5"
+        state["CURR:PROT?"] = "5.5"
         assert await client.set_current_limit(5.5) == 5.5
 
-        # get_system_error, get_setpoints, get_config_registers, clear_faults
         state["SYST:ERR?"] = "0,No error"
         assert await client.get_system_error() == "0,No error"
         state["SYST:ERR?"] = ""
@@ -655,8 +641,8 @@ async def test_client_telemetry_and_controls() -> None:
             "current_setpoint": 2.0,
         }
 
-        state[client.profile.cmd_get_voltage_limit] = "30.0"
-        state[client.profile.cmd_get_current_limit] = "5.0"
+        state["VOLT:PROT?"] = "30.0"
+        state["CURR:PROT?"] = "5.0"
         regs = await client.get_config_registers()
         assert regs == {
             "voltage_limit": 30.0,

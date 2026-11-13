@@ -6,10 +6,9 @@ from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .dialects import ScpiProfile, parse_output_state
+from .dialects import STATUS_ACTIVE, STATUS_STANDBY, ScpiProfile, parse_output_state
 from .models import parse_strict_float
 
-# Canonical measurement fields produced by queries
 FIELD_VOLTAGE = "voltage"
 FIELD_CURRENT = "current"
 FIELD_POWER = "power"
@@ -59,6 +58,26 @@ class QueryDescriptor:
     component_count: int = 1
 
 
+def _float_descriptor(command: str, field: str, max_val: float | None = None) -> QueryDescriptor:
+    def _parse(raw: str | None) -> dict[str, Any]:
+        val = parse_strict_float(raw)
+        if val is None:
+            return {}
+        if max_val is not None and not (0.0 <= val <= max_val):
+            return {}
+        return {field: val}
+
+    return QueryDescriptor(command=command, fields=frozenset({field}), parser=_parse)
+
+
+def _bool_descriptor(command: str, field: str) -> QueryDescriptor:
+    return QueryDescriptor(
+        command=command,
+        fields=frozenset({field}),
+        parser=lambda r: {field: st} if (st := parse_output_state(r)) is not None else {},
+    )
+
+
 class QueryPlanner:
     """Constructs minimal, deterministic SCPI telemetry queries."""
 
@@ -80,8 +99,8 @@ class QueryPlanner:
             return []
 
         prof = self.profile
+        descs: list[QueryDescriptor] = []
 
-        # 1. OWON / composite profile: use MEAS:ALL:INFO? if available and any composite field needed
         if prof.cmd_get_composite_telemetry and (fields & COMPOSITE_FIELDS):
 
             def _parse_composite(raw: str | None) -> dict[str, Any]:
@@ -90,107 +109,54 @@ class QueryPlanner:
                     return {}
                 return {f: getattr(snap, f) for f in COMPOSITE_FIELDS}
 
-            desc = QueryDescriptor(
-                command=prof.cmd_get_composite_telemetry,
-                fields=COMPOSITE_FIELDS,
-                parser=_parse_composite,
-            )
-            # If DMM is also needed on this poll, DMM is a separate query
-            if FIELD_DMM in fields and self.has_dmm and prof.cmd_get_dmm_reading:
-                return [desc, self._build_dmm_descriptor()]
-            return [desc]
-
-        # 2. Discrete scalar queries
-        descs: list[QueryDescriptor] = []
-
-        if FIELD_VOLTAGE in fields:
             descs.append(
                 QueryDescriptor(
-                    command="MEAS:VOLT?",
-                    fields=frozenset({FIELD_VOLTAGE}),
-                    parser=lambda r: (
-                        {FIELD_VOLTAGE: v}
-                        if (v := parse_strict_float(r)) is not None and 0.0 <= v <= 500.0
-                        else {}
-                    ),
+                    command=prof.cmd_get_composite_telemetry,
+                    fields=COMPOSITE_FIELDS,
+                    parser=_parse_composite,
                 )
             )
+        else:
+            if FIELD_VOLTAGE in fields:
+                descs.append(_float_descriptor("MEAS:VOLT?", FIELD_VOLTAGE, max_val=500.0))
+            if FIELD_CURRENT in fields:
+                descs.append(_float_descriptor("MEAS:CURR?", FIELD_CURRENT, max_val=200.0))
+            if FIELD_POWER in fields:
+                descs.append(_float_descriptor("MEAS:POW?", FIELD_POWER))
 
-        if FIELD_CURRENT in fields:
-            descs.append(
-                QueryDescriptor(
-                    command="MEAS:CURR?",
-                    fields=frozenset({FIELD_CURRENT}),
-                    parser=lambda r: (
-                        {FIELD_CURRENT: i}
-                        if (i := parse_strict_float(r)) is not None and 0.0 <= i <= 200.0
-                        else {}
-                    ),
+            if FIELD_OUTPUT_ENABLED in fields or (
+                FIELD_STATUS_TEXT in fields and not prof.reports_status_in_telemetry
+            ):
+                outp_cmd = prof.format_get_output(channel)
+
+                def _parse_outp(raw: str | None) -> dict[str, Any]:
+                    st = parse_output_state(raw)
+                    if st is None:
+                        return {}
+                    res: dict[str, Any] = {FIELD_OUTPUT_ENABLED: st}
+                    if not prof.reports_status_in_telemetry:
+                        res[FIELD_STATUS_TEXT] = STATUS_ACTIVE if st else STATUS_STANDBY
+                    return res
+
+                descs.append(
+                    QueryDescriptor(
+                        command=outp_cmd,
+                        fields=frozenset({FIELD_OUTPUT_ENABLED, FIELD_STATUS_TEXT}),
+                        parser=_parse_outp,
+                    )
                 )
-            )
 
-        if FIELD_POWER in fields:
-            descs.append(
-                QueryDescriptor(
-                    command="MEAS:POW?",
-                    fields=frozenset({FIELD_POWER}),
-                    parser=lambda r: (
-                        {FIELD_POWER: p} if (p := parse_strict_float(r)) is not None else {}
-                    ),
-                )
-            )
-
-        if FIELD_OUTPUT_ENABLED in fields or (
-            FIELD_STATUS_TEXT in fields and not prof.reports_status_in_telemetry
-        ):
-            outp_cmd = prof.format_get_output(channel)
-
-            def _parse_outp(raw: str | None) -> dict[str, Any]:
-                st = parse_output_state(raw)
-                if st is None:
-                    return {}
-                res: dict[str, Any] = {FIELD_OUTPUT_ENABLED: st}
-                if not prof.reports_status_in_telemetry:
-                    res[FIELD_STATUS_TEXT] = "Active" if st else "Standby / Output Off"
-                return res
-
-            descs.append(
-                QueryDescriptor(
-                    command=outp_cmd,
-                    fields=frozenset({FIELD_OUTPUT_ENABLED, FIELD_STATUS_TEXT}),
-                    parser=_parse_outp,
-                )
-            )
+            if FIELD_OVP_TRIPPED in fields and prof.cmd_get_ovp_tripped:
+                descs.append(_bool_descriptor(prof.cmd_get_ovp_tripped, FIELD_OVP_TRIPPED))
+            if FIELD_OCP_TRIPPED in fields and prof.cmd_get_ocp_tripped:
+                descs.append(_bool_descriptor(prof.cmd_get_ocp_tripped, FIELD_OCP_TRIPPED))
 
         if FIELD_DMM in fields and self.has_dmm and prof.cmd_get_dmm_reading:
-            descs.append(self._build_dmm_descriptor())
-
-        if FIELD_OVP_TRIPPED in fields and prof.cmd_get_ovp_tripped:
-            descs.append(
-                QueryDescriptor(
-                    command=prof.cmd_get_ovp_tripped,
-                    fields=frozenset({FIELD_OVP_TRIPPED}),
-                    parser=lambda r: (
-                        {FIELD_OVP_TRIPPED: st} if (st := parse_output_state(r)) is not None else {}
-                    ),
-                )
-            )
-
-        if FIELD_OCP_TRIPPED in fields and prof.cmd_get_ocp_tripped:
-            descs.append(
-                QueryDescriptor(
-                    command=prof.cmd_get_ocp_tripped,
-                    fields=frozenset({FIELD_OCP_TRIPPED}),
-                    parser=lambda r: (
-                        {FIELD_OCP_TRIPPED: st} if (st := parse_output_state(r)) is not None else {}
-                    ),
-                )
-            )
+            descs.append(_float_descriptor(prof.cmd_get_dmm_reading, FIELD_DMM))
 
         if not descs:
             return []
 
-        # 3. If dialect supports IEEE 488.2 compound queries, bundle into 1 round-trip!
         if self.compound_queries and prof.supports_compound_queries and len(descs) > 1:
             compound_cmd = compound_command([d.command for d in descs])
             all_fields = frozenset().union(*(d.fields for d in descs))
@@ -215,10 +181,3 @@ class QueryPlanner:
             ]
 
         return descs
-
-    def _build_dmm_descriptor(self) -> QueryDescriptor:
-        return QueryDescriptor(
-            command=self.profile.cmd_get_dmm_reading,
-            fields=frozenset({FIELD_DMM}),
-            parser=lambda r: {FIELD_DMM: v} if (v := parse_strict_float(r)) is not None else {},
-        )

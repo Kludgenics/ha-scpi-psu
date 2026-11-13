@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from scpi_client_tests.matrix import DEVICE_MATRIX, SIM_YAML
@@ -28,6 +31,53 @@ from custom_components.scpi_psu.const import (
     dmm_identifier,
 )
 from custom_components.scpi_psu.coordinator import ScpiPsuCoordinator
+
+
+@asynccontextmanager
+async def _setup_sim_entry(
+    hass: HomeAssistant,
+    resource_id: str,
+    title: str,
+    entry_id: str,
+    *,
+    custom_query_hook: Any = None,
+) -> AsyncIterator[tuple[MockConfigEntry, ScpiPsuCoordinator]]:
+    bridge = PyVisaSimTcpBridge(resource_id, SIM_YAML, custom_query_hook=custom_query_hook)
+    socket_url = await bridge.start()
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=title,
+        data={CONF_SERIAL_PORT: socket_url, CONF_BAUDRATE: 115200},
+        entry_id=entry_id,
+    )
+    entry.add_to_hass(hass)
+    entry._async_set_state(hass, ConfigEntryState.SETUP_IN_PROGRESS, None)
+    try:
+        with (
+            patch(
+                "custom_components.scpi_psu.ScpiPsuCoordinator",
+                side_effect=lambda h, e: ScpiPsuCoordinator(
+                    h, e, command_delay=0.0, write_delay=0.0
+                ),
+            ),
+            patch.object(hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock),
+            patch.object(
+                hass.config_entries,
+                "async_unload_platforms",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            assert await async_setup_entry(hass, entry) is True
+            yield entry, hass.data[DOMAIN][entry.entry_id]
+    finally:
+        await bridge.stop()
+
+
+async def _collect(platform_mod: Any, hass: HomeAssistant, entry: MockConfigEntry) -> list[Any]:
+    items: list[Any] = []
+    await platform_mod.async_setup_entry(hass, entry, items.extend)
+    return items
 
 
 @pytest.mark.enable_socket
@@ -58,185 +108,127 @@ async def test_ha_integration_compatibility_matrix(
     expected_telemetry: dict[str, Any],
 ) -> None:
     """Test full Home Assistant integration and entity platforms against simulated hardware."""
-    bridge = PyVisaSimTcpBridge(resource_id, SIM_YAML)
-    socket_url = await bridge.start()
+    async with _setup_sim_entry(
+        hass,
+        resource_id,
+        f"{expected_mfr} {expected_model}",
+        f"test_sim_{expected_model.lower()}",
+    ) as (entry, coordinator):
+        assert coordinator.identity.manufacturer == expected_mfr
+        assert coordinator.identity.model == expected_model
+        assert coordinator.identity.channels == expected_channels
+        assert coordinator.identity.has_dmm == expected_has_dmm
+        assert coordinator.data.ch1.voltage == expected_telemetry["voltage"]
+        assert coordinator.data.ch1.current == expected_telemetry["current"]
+        assert coordinator.data.ch1.power == expected_telemetry["power"]
+        assert coordinator.data.ch1.status_text == expected_telemetry["status"]
+        if expected_has_dmm:
+            assert coordinator.data.dmm_reading == expected_telemetry["dmm"]
 
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title=f"{expected_mfr} {expected_model}",
-        data={
-            CONF_SERIAL_PORT: socket_url,
-            CONF_BAUDRATE: 115200,
-        },
-        entry_id=f"test_sim_{expected_model.lower()}",
-    )
-    entry.add_to_hass(hass)
+        sensors: list[sensor.ScpiPsuSensor] = await _collect(sensor, hass, entry)
+        sensor_dict = {s.entity_description.key: s.native_value for s in sensors}
+        assert sensor_dict["voltage"] == expected_telemetry["voltage"]
+        assert sensor_dict["current"] == expected_telemetry["current"]
+        assert sensor_dict["power"] == expected_telemetry["power"]
+        if expected_has_dmm:
+            assert "dmm" in sensor_dict
+            assert sensor_dict["dmm"] == expected_telemetry["dmm"]
+        else:
+            assert "dmm" not in sensor_dict
 
-    from homeassistant.config_entries import ConfigEntryState
+        bin_sensors: list[binary_sensor.ScpiPsuBinarySensor] = await _collect(
+            binary_sensor, hass, entry
+        )
+        bin_dict = {b.entity_description.key: b.is_on for b in bin_sensors}
+        assert bin_dict["connected"] is True
 
-    entry._async_set_state(hass, ConfigEntryState.SETUP_IN_PROGRESS, None)
+        numbers: list[number.ScpiPsuNumber] = await _collect(number, hass, entry)
+        num_dict = {n.entity_description.key: n.native_max_value for n in numbers}
+        assert num_dict["voltage_setpoint"] == max_v
 
-    try:
-        with (
-            patch(
-                "custom_components.scpi_psu.ScpiPsuCoordinator",
-                side_effect=lambda h, e: ScpiPsuCoordinator(
-                    h, e, command_delay=0.0, write_delay=0.0
-                ),
-            ),
-            patch.object(hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock),
-            patch.object(
-                hass.config_entries,
-                "async_unload_platforms",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-        ):
-            assert await async_setup_entry(hass, entry) is True
-            coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
+        buttons: list[button.ScpiPsuResetButton] = await _collect(button, hass, entry)
+        assert len(buttons) == 1
 
-            assert coordinator.identity.manufacturer == expected_mfr
-            assert coordinator.identity.model == expected_model
-            assert coordinator.identity.channels == expected_channels
-            assert coordinator.identity.has_dmm == expected_has_dmm
-            assert coordinator.data.ch1.voltage == expected_telemetry["voltage"]
-            assert coordinator.data.ch1.current == expected_telemetry["current"]
-            assert coordinator.data.ch1.power == expected_telemetry["power"]
-            assert coordinator.data.ch1.status_text == expected_telemetry["status"]
-            if expected_has_dmm:
-                assert coordinator.data.dmm_reading == expected_telemetry["dmm"]
+        switches: list[switch.SwitchEntity] = await _collect(switch, hass, entry)
+        if expected_channels > 1:
+            assert len(switches) == 1 + expected_channels
+            ch_switches = switches[1:]
+            assert len(ch_switches) == expected_channels
+            for s in switches:
+                assert s.is_on is True
+        else:
+            assert len(switches) == 1
+            assert switches[0].is_on is True
 
-            # Verify platform entities instantiate cleanly against coordinator data
-            sensors: list[sensor.ScpiPsuSensor] = []
-            await sensor.async_setup_entry(
-                hass, entry, MagicMock(side_effect=lambda ents: sensors.extend(ents))
-            )
-            sensor_dict = {s.entity_description.key: s.native_value for s in sensors}
-            assert sensor_dict["voltage"] == expected_telemetry["voltage"]
-            assert sensor_dict["current"] == expected_telemetry["current"]
-            assert sensor_dict["power"] == expected_telemetry["power"]
-            if expected_has_dmm:
-                assert "dmm" in sensor_dict
-                assert sensor_dict["dmm"] == expected_telemetry["dmm"]
-            else:
-                assert "dmm" not in sensor_dict
+        parent_id = coordinator.parent_device_id
+        assert parent_id is not None
+        if expected_channels > 1:
+            master_sw = switches[0]
+            master_info = master_sw.device_info
+            assert master_info is not None
+            assert isinstance(master_info, dict)
+            assert master_info.get("parent_device_id") is None
+            assert (DOMAIN, entry.entry_id) in master_info.get("identifiers", set())
 
-            bin_sensors: list[binary_sensor.ScpiPsuBinarySensor] = []
-            await binary_sensor.async_setup_entry(
-                hass, entry, MagicMock(side_effect=lambda ents: bin_sensors.extend(ents))
-            )
-            bin_dict = {b.entity_description.key: b.is_on for b in bin_sensors}
-            assert bin_dict["connected"] is True
-
-            numbers: list[number.ScpiPsuNumber] = []
-            await number.async_setup_entry(
-                hass, entry, MagicMock(side_effect=lambda ents: numbers.extend(ents))
-            )
-            num_dict = {n.entity_description.key: n.native_max_value for n in numbers}
-            assert num_dict["voltage_setpoint"] == max_v
-
-            buttons: list[button.ScpiPsuResetButton] = []
-            await button.async_setup_entry(
-                hass, entry, MagicMock(side_effect=lambda ents: buttons.extend(ents))
-            )
-            assert len(buttons) == 1
-
-            switches: list[switch.SwitchEntity] = []
-            await switch.async_setup_entry(
-                hass, entry, MagicMock(side_effect=lambda ents: switches.extend(ents))
-            )
-            if expected_channels > 1:
-                # 1 master switch + N channel switches
-                assert len(switches) == 1 + expected_channels
-                master_sw = switches[0]
-                ch_switches = switches[1:]
-                assert len(ch_switches) == expected_channels
-                for s in switches:
-                    assert s.is_on is True
-            else:
-                assert len(switches) == 1
-                assert switches[0].is_on is True
-
-            # Verify child device hierarchy mapping
-            parent_id = coordinator.parent_device_id
-            assert parent_id is not None
-            if expected_channels > 1:
-                # Master switch is attached to parent chassis device
-                master_sw = switches[0]
-                master_info = master_sw.device_info
-                assert master_info is not None
-                assert isinstance(master_info, dict)
-                assert master_info.get("parent_device_id") is None
-                assert (DOMAIN, entry.entry_id) in master_info.get("identifiers", set())
-
-                # Channel switches are attached to their respective channel child devices
-                for ch_idx, s in enumerate(switches[1:], start=1):
-                    sw_info = s.device_info
-                    assert sw_info is not None
-                    assert isinstance(sw_info, dict)
-                    assert sw_info.get("parent_device_id") == parent_id
-                    assert (DOMAIN, channel_identifier(entry.entry_id, ch_idx)) in sw_info.get(
-                        "identifiers", set()
-                    )
-
-                for sensor_ent in sensors:
-                    if sensor_ent.entity_description.key in (
-                        "voltage",
-                        "current",
-                        "power",
-                        "status",
-                    ):
-                        s_info = sensor_ent.device_info
-                        assert s_info is not None
-                        assert isinstance(s_info, dict)
-                        assert s_info.get("parent_device_id") == parent_id
-            else:
-                sw_info = switches[0].device_info
+            for ch_idx, s in enumerate(switches[1:], start=1):
+                sw_info = s.device_info
                 assert sw_info is not None
                 assert isinstance(sw_info, dict)
-                assert "parent_device_id" not in sw_info
-                assert (DOMAIN, entry.entry_id) in sw_info.get("identifiers", set())
-
-            if expected_has_dmm:
-                dmm_sensor = next(s for s in sensors if s.entity_description.key == "dmm")
-                dmm_info = dmm_sensor.device_info
-                assert dmm_info is not None
-                assert isinstance(dmm_info, dict)
-                assert dmm_info.get("parent_device_id") == parent_id
-                assert (DOMAIN, dmm_identifier(entry.entry_id)) in dmm_info.get(
+                assert sw_info.get("parent_device_id") == parent_id
+                assert (DOMAIN, channel_identifier(entry.entry_id, ch_idx)) in sw_info.get(
                     "identifiers", set()
                 )
 
-            # Exercise coordinator actions (turn off output, change voltage setpoint)
-            if expected_channels > 1:
-                # Test individual channel toggle
-                ch2_switch = switches[2]  # Channel 2 switch
-                await ch2_switch.async_turn_off()
-                assert ch2_switch.is_on is False
-                await ch2_switch.async_turn_on()
-                assert ch2_switch.is_on is True
+            for sensor_ent in sensors:
+                if sensor_ent.entity_description.key in (
+                    "voltage",
+                    "current",
+                    "power",
+                    "status",
+                ):
+                    s_info = sensor_ent.device_info
+                    assert s_info is not None
+                    assert isinstance(s_info, dict)
+                    assert s_info.get("parent_device_id") == parent_id
+        else:
+            sw_info = switches[0].device_info
+            assert sw_info is not None
+            assert isinstance(sw_info, dict)
+            assert "parent_device_id" not in sw_info
+            assert (DOMAIN, entry.entry_id) in sw_info.get("identifiers", set())
 
-                # Test whole-device master toggle
-                master_sw = switches[0]
-                await master_sw.async_turn_off()
-                assert master_sw.is_on is False
-                await master_sw.async_turn_on()
-                assert master_sw.is_on is True
-            else:
-                await switches[0].async_turn_off()
-                assert switches[0].is_on is False
-                await switches[0].async_turn_on()
-                assert switches[0].is_on is True
+        if expected_has_dmm:
+            dmm_sensor = next(s for s in sensors if s.entity_description.key == "dmm")
+            dmm_info = dmm_sensor.device_info
+            assert dmm_info is not None
+            assert isinstance(dmm_info, dict)
+            assert dmm_info.get("parent_device_id") == parent_id
+            assert (DOMAIN, dmm_identifier(entry.entry_id)) in dmm_info.get("identifiers", set())
 
-            volt_num = next(n for n in numbers if n.entity_description.key == "voltage_setpoint")
-            new_v = round(min(max_v * 0.4, 10.0), 2)
-            await volt_num.async_set_native_value(new_v)
-            assert coordinator.data.voltage_setpoint == new_v
+        if expected_channels > 1:
+            ch2_switch = switches[2]
+            await ch2_switch.async_turn_off()
+            assert ch2_switch.is_on is False
+            await ch2_switch.async_turn_on()
+            assert ch2_switch.is_on is True
 
-            # Unload integration
-            assert await async_unload_entry(hass, entry) is True
-    finally:
-        await bridge.stop()
+            master_sw = switches[0]
+            await master_sw.async_turn_off()
+            assert master_sw.is_on is False
+            await master_sw.async_turn_on()
+            assert master_sw.is_on is True
+        else:
+            await switches[0].async_turn_off()
+            assert switches[0].is_on is False
+            await switches[0].async_turn_on()
+            assert switches[0].is_on is True
+
+        volt_num = next(n for n in numbers if n.entity_description.key == "voltage_setpoint")
+        new_v = round(min(max_v * 0.4, 10.0), 2)
+        await volt_num.async_set_native_value(new_v)
+        assert coordinator.data.voltage_setpoint == new_v
+
+        assert await async_unload_entry(hass, entry) is True
 
 
 @pytest.mark.enable_socket
@@ -261,92 +253,49 @@ async def test_simulated_fault_trip_and_clear(hass: HomeAssistant) -> None:
             return "12.000, 2.000, 24.000, 0, 0, 0, 1"
         return None
 
-    bridge = PyVisaSimTcpBridge("ASRL1::INSTR", SIM_YAML, custom_query_hook=_hook)
-    socket_url = await bridge.start()
+    async with _setup_sim_entry(
+        hass,
+        "ASRL1::INSTR",
+        "OWON SPE6103 Fault Test",
+        "test_sim_spe6103_fault",
+        custom_query_hook=_hook,
+    ) as (entry, coordinator):
+        bin_sensors: list[binary_sensor.ScpiPsuBinarySensor] = await _collect(
+            binary_sensor, hass, entry
+        )
+        for b in bin_sensors:
+            b.hass = hass
+            await b.async_added_to_hass()
 
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="OWON SPE6103 Fault Test",
-        data={
-            CONF_SERIAL_PORT: socket_url,
-            CONF_BAUDRATE: 115200,
-        },
-        entry_id="test_sim_spe6103_fault",
-    )
-    entry.add_to_hass(hass)
+        switches: list[switch.SwitchEntity] = await _collect(switch, hass, entry)
+        buttons: list[button.ScpiPsuResetButton] = await _collect(button, hass, entry)
 
-    from homeassistant.config_entries import ConfigEntryState
+        bin_map = {b.entity_description.key: b for b in bin_sensors}
 
-    entry._async_set_state(hass, ConfigEntryState.SETUP_IN_PROGRESS, None)
+        assert bin_map["connected"].is_on is True
+        assert bin_map["fault"].is_on is False
+        assert bin_map["ocp_tripped"].is_on is False
+        assert switches[0].is_on is True
 
-    try:
-        with (
-            patch(
-                "custom_components.scpi_psu.ScpiPsuCoordinator",
-                side_effect=lambda h, e: ScpiPsuCoordinator(
-                    h, e, command_delay=0.0, write_delay=0.0
-                ),
-            ),
-            patch.object(hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock),
-            patch.object(
-                hass.config_entries,
-                "async_unload_platforms",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-        ):
-            assert await async_setup_entry(hass, entry) is True
-            coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
+        await switches[0].async_turn_off()
+        await coordinator.async_refresh()
 
-            bin_sensors: list[binary_sensor.ScpiPsuBinarySensor] = []
-            await binary_sensor.async_setup_entry(
-                hass, entry, MagicMock(side_effect=lambda ents: bin_sensors.extend(ents))
-            )
-            for b in bin_sensors:
-                b.hass = hass
-                await b.async_added_to_hass()
+        assert fault_active is True
+        assert bin_map["fault"].is_on is True
+        assert bin_map["ocp_tripped"].is_on is True
+        assert coordinator.data.ch1.status_text == "Fault / Protection Trip"
 
-            switches: list[switch.SwitchEntity] = []
-            await switch.async_setup_entry(
-                hass, entry, MagicMock(side_effect=lambda ents: switches.extend(ents))
-            )
+        await buttons[0].async_press()
+        await coordinator.async_refresh()
 
-            buttons: list[button.ScpiPsuResetButton] = []
-            await button.async_setup_entry(
-                hass, entry, MagicMock(side_effect=lambda ents: buttons.extend(ents))
-            )
+        assert fault_active is False
+        assert bin_map["fault"].is_on is False
+        assert bin_map["ocp_tripped"].is_on is False
+        assert coordinator.data.ch1.status_text == "Constant Voltage (CV)"
 
-            bin_map = {b.entity_description.key: b for b in bin_sensors}
-
-            # 1. Normal state
-            assert bin_map["connected"].is_on is True
-            assert bin_map["fault"].is_on is False
-            assert bin_map["ocp_tripped"].is_on is False
-            assert switches[0].is_on is True
-
-            # 2. Toggle output off -> triggers fault/OCP trip in sim
-            await switches[0].async_turn_off()
-            await coordinator.async_refresh()
-
-            assert fault_active is True
-            assert bin_map["fault"].is_on is True
-            assert bin_map["ocp_tripped"].is_on is True
-            assert coordinator.data.ch1.status_text == "Fault / Protection Trip"
-
-            # 3. Press Clear Fault button -> sends *CLS, resets trip and recovers
-            await buttons[0].async_press()
-            await coordinator.async_refresh()
-
-            assert fault_active is False
-            assert bin_map["fault"].is_on is False
-            assert bin_map["ocp_tripped"].is_on is False
-            assert coordinator.data.ch1.status_text == "Constant Voltage (CV)"
-
-            for b in bin_sensors:
-                await b.async_will_remove_from_hass()
-            assert await async_unload_entry(hass, entry) is True
-    finally:
-        await bridge.stop()
+        for b in bin_sensors:
+            await b.async_will_remove_from_hass()
+        assert await async_unload_entry(hass, entry) is True
 
 
 @pytest.mark.enable_socket
@@ -383,71 +332,41 @@ async def test_simulated_power_blip_fault_and_reboot_auto_recovery(hass: HomeAss
             return f"{boot_noise}OWON,SPE6103,2138123,V1.2.3"
         return None
 
-    bridge = PyVisaSimTcpBridge("ASRL1::INSTR", SIM_YAML, custom_query_hook=_hook)
-    socket_url = await bridge.start()
+    async with _setup_sim_entry(
+        hass,
+        "ASRL1::INSTR",
+        "OWON SPE6103 Power Cycle Recovery Test",
+        "test_sim_power_cycle_recovery",
+        custom_query_hook=_hook,
+    ) as (entry, coordinator):
+        setup_done = True
 
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="OWON SPE6103 Power Cycle Recovery Test",
-        data={
-            CONF_SERIAL_PORT: socket_url,
-            CONF_BAUDRATE: 115200,
-        },
-        entry_id="test_sim_power_cycle_recovery",
-    )
-    entry.add_to_hass(hass)
+        assert coordinator.data.connected is True
+        assert coordinator.data.responding is True
+        assert coordinator.data.ch1.voltage == 12.0
 
-    from homeassistant.config_entries import ConfigEntryState
+        import time as _time
 
-    entry._async_set_state(hass, ConfigEntryState.SETUP_IN_PROGRESS, None)
-
-    try:
-        with (
-            patch(
-                "custom_components.scpi_psu.ScpiPsuCoordinator",
-                side_effect=lambda h, e: ScpiPsuCoordinator(
-                    h, e, command_delay=0.0, write_delay=0.0
-                ),
-            ),
-            patch.object(hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock),
-            patch.object(
-                hass.config_entries,
-                "async_unload_platforms",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
+        with patch(
+            "custom_components.scpi_psu.coordinator.time.monotonic",
+            return_value=_time.monotonic() + 60.0,
         ):
-            assert await async_setup_entry(hass, entry) is True
-            coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-            setup_done = True
-
-            # 1. Device is initially online and operational
-            assert coordinator.data.connected is True
-            assert coordinator.data.ch1.voltage == 12.0
-
-            # 2. Misaligned reply arrives during SYST:ERR? -> triggers session invalidation
-            coordinator._last_full_poll = 0.0
             await coordinator.async_refresh()
 
-            # 3. First attempt to poll fails because device is rebooting (timeout)
-            await coordinator.async_refresh()
-            assert coordinator._consecutive_failures == 1
+        await coordinator.async_refresh()
+        assert coordinator.data.responding is True
 
-            # 4. Successive failures trip unresponsive & disconnect thresholds (consecutive_failures >= 3 -> client.close())
-            await coordinator.async_refresh()
-            assert coordinator.data.ch1.status_text == "Unresponsive / Power Lost"
-            assert coordinator._consecutive_failures == 2
+        await coordinator.async_refresh()
+        assert coordinator.data.responding is False
+        assert coordinator.data.ch1.status_text == "Unresponsive / Power Lost"
 
-            await coordinator.async_refresh()
-            assert coordinator._consecutive_failures == 3
+        await coordinator.async_refresh()
+        assert coordinator.data.connected is False
 
-            # 5. Device finishes rebooting, emits boot debug noise, and automatically recovers
-            await coordinator.async_refresh()
-            assert coordinator.data.connected is True
-            assert coordinator.data.ch1.voltage == 12.0
-            assert coordinator.data.ch1.status_text == "Constant Voltage (CV)"
-            assert coordinator._consecutive_failures == 0
+        await coordinator.async_refresh()
+        assert coordinator.data.connected is True
+        assert coordinator.data.responding is True
+        assert coordinator.data.ch1.voltage == 12.0
+        assert coordinator.data.ch1.status_text == "Constant Voltage (CV)"
 
-            assert await async_unload_entry(hass, entry) is True
-    finally:
-        await bridge.stop()
+        assert await async_unload_entry(hass, entry) is True

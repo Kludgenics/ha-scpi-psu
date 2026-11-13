@@ -4,7 +4,21 @@ from __future__ import annotations
 
 import contextlib
 
-from .models import PROFILE_OWON, PROFILE_STANDARD, TelemetrySnapshot, parse_strict_float
+from .models import (
+    PROFILE_OWON,
+    PROFILE_STANDARD,
+    STATUS_ACTIVE,
+    STATUS_STANDBY,
+    TelemetrySnapshot,
+    parse_strict_float,
+)
+
+OWON_STATUS_CODES: dict[int, str] = {
+    0: STATUS_STANDBY,
+    1: "Constant Voltage (CV)",
+    2: "Constant Current (CC)",
+    3: "Fault / Protection Trip",
+}
 
 
 def parse_output_state(raw: str | None) -> bool | None:
@@ -142,16 +156,9 @@ class OwonScpiProfile(ScpiProfile):
             with contextlib.suppress(ValueError):
                 code = int(float(tokens[6]))
 
-        if code == 0:
-            status_text = "Standby / Output Off"
-        elif code == 1:
-            status_text = "Constant Voltage (CV)"
-        elif code == 2:
-            status_text = "Constant Current (CC)"
-        elif code == 3:
-            status_text = "Fault / Protection Trip"
-        else:
-            status_text = "Active"
+        status_text = (
+            OWON_STATUS_CODES.get(code, STATUS_ACTIVE) if code is not None else STATUS_ACTIVE
+        )
 
         fault = bool(code == 3 or ovp or ocp or opp)
         outp: bool | None = None

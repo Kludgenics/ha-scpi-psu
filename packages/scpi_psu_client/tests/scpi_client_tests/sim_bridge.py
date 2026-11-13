@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pyvisa
@@ -17,16 +18,20 @@ class PyVisaSimTcpBridge:
         resource_name: str,
         sim_yaml_path: str | None = None,
         custom_query_hook: Any = None,
+        async_transport_hook: Callable[[str, asyncio.StreamWriter], Awaitable[bool]] | None = None,
     ) -> None:
         self.resource_name = resource_name
         self.sim_yaml_path = sim_yaml_path
         self.custom_query_hook = custom_query_hook
+        self.async_transport_hook = async_transport_hook
         self._server: asyncio.Server | None = None
         self.port: int = 0
         self._inst: Any = None
         self._rm: Any = None
         self._client_tasks: set[asyncio.Task] = set()
         self._client_errors: list[BaseException] = []
+        self.observed_commands: list[str] = []
+        self.error_commands: list[str] = []
 
     async def start(self) -> str:
         """Start TCP server on an ephemeral loopback port and return socket:// URL."""
@@ -53,6 +58,13 @@ class PyVisaSimTcpBridge:
         if not task.cancelled() and (error := task.exception()) is not None:
             self._client_errors.append(error)
 
+    def query_instrument(self, line: str) -> str:
+        """Query the underlying pyvisa-sim resource, expanding compound queries."""
+        if ";" in line:
+            subcmds = [c.strip().lstrip(":") for c in line.split(";")]
+            return ";".join(self._inst.query(sc).strip() for sc in subcmds)
+        return str(self._inst.query(line)).strip()
+
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
@@ -70,6 +82,10 @@ class PyVisaSimTcpBridge:
                 line = line_bytes.decode("ascii", errors="ignore").strip()
                 if not line:
                     continue
+                self.observed_commands.append(line)
+
+                if self.async_transport_hook and await self.async_transport_hook(line, writer):
+                    continue
 
                 if "?" in line:
                     try:
@@ -77,16 +93,11 @@ class PyVisaSimTcpBridge:
                         if self.custom_query_hook:
                             reply = self.custom_query_hook(line)
                         if reply is None:
-                            # Support IEEE 488.2 compound queries separated by semicolons
-                            if ";" in line:
-                                subcmds = [c.strip().lstrip(":") for c in line.split(";")]
-                                subreplies = [self._inst.query(sc).strip() for sc in subcmds]
-                                reply = ";".join(subreplies)
-                            else:
-                                reply = self._inst.query(line)
+                            reply = self.query_instrument(line)
                         writer.write((reply.strip() + "\n").encode("ascii"))
                         await writer.drain()
                     except pyvisa.errors.VisaIOError:
+                        self.error_commands.append(line)
                         writer.write(b"ERROR\n")
                         await writer.drain()
                 else:
@@ -94,8 +105,10 @@ class PyVisaSimTcpBridge:
                     if self.custom_query_hook:
                         consumed = bool(self.custom_query_hook(line))
                     if not consumed:
-                        with contextlib.suppress(pyvisa.errors.VisaIOError):
+                        try:
                             self._inst.write(line)
+                        except pyvisa.errors.VisaIOError:
+                            self.error_commands.append(line)
         except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError, OSError):
             pass
         finally:

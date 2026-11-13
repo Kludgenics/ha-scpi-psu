@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,11 +19,13 @@ from homeassistant.const import (
     UnitOfPower,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import ChildDeviceInfo, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
-from .coordinator import ScpiPsuCoordinator, ScpiPsuData, ScpiPsuEntity
+from .coordinator import (
+    ScpiDescriptionMixin,
+    ScpiPsuDescribedEntity,
+    setup_described_entities,
+)
 from .scpi_psu_client import (
     FIELD_CURRENT,
     FIELD_DMM,
@@ -35,15 +36,8 @@ from .scpi_psu_client import (
 
 
 @dataclass(frozen=True, kw_only=True)
-class ScpiPsuSensorEntityDescription(SensorEntityDescription):
+class ScpiPsuSensorEntityDescription(ScpiDescriptionMixin[Any], SensorEntityDescription):
     """Describes SCPI PSU sensor entity."""
-
-    value_fn: Callable[[ScpiPsuData], Any]
-    measurement_field: str | None = None
-    is_supported_fn: Callable[[ScpiPsuCoordinator], bool] = lambda _: True
-    device_info_fn: Callable[[ScpiPsuCoordinator], DeviceInfo | ChildDeviceInfo] = lambda coord: (
-        coord.channel_device_info(1)
-    )
 
 
 SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
@@ -114,32 +108,13 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up SCPI PSU sensors."""
-    coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
-            ScpiPsuSensor(coordinator, description)
-            for description in SENSORS
-            if description.is_supported_fn(coordinator)
-        ]
-    )
+    setup_described_entities(hass, entry, async_add_entities, SENSORS, ScpiPsuSensor)
 
 
-class ScpiPsuSensor(ScpiPsuEntity, SensorEntity):
+class ScpiPsuSensor(ScpiPsuDescribedEntity[ScpiPsuSensorEntityDescription], SensorEntity):
     """Representation of an SCPI PSU sensor."""
 
     entity_description: ScpiPsuSensorEntityDescription
-
-    def __init__(
-        self,
-        coordinator: ScpiPsuCoordinator,
-        description: ScpiPsuSensorEntityDescription,
-    ) -> None:
-        super().__init__(coordinator)
-        self.entity_description = description
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
-        self._attr_device_info = description.device_info_fn(coordinator)
-        if description.measurement_field:
-            self._tracked_fields = ((description.measurement_field, 1),)
 
     @property
     def native_value(self) -> Any:

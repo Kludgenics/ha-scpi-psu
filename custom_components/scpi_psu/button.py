@@ -7,10 +7,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import ScpiPsuCoordinator
+from .coordinator import ScpiPsuCoordinator, ScpiPsuEntity
 
 
 async def async_setup_entry(
@@ -23,10 +22,9 @@ async def async_setup_entry(
     async_add_entities([ScpiPsuResetButton(coordinator)])
 
 
-class ScpiPsuResetButton(CoordinatorEntity[ScpiPsuCoordinator], ButtonEntity):
+class ScpiPsuResetButton(ScpiPsuEntity, ButtonEntity):
     """Button to send *CLS (Clear Errors) to SCPI PSU."""
 
-    _attr_has_entity_name = True
     _attr_name = "Clear Fault"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:restart-alert"

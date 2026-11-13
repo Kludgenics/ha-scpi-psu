@@ -1,6 +1,11 @@
 """Constants for the SCPI Programmable Power Supply integration."""
 
+from typing import TYPE_CHECKING, Any
+
 from .scpi_psu_client import DEFAULT_BAUDRATE, PROFILE_OWON, PROFILE_STANDARD
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
 
 DOMAIN = "scpi_psu"
 
@@ -40,7 +45,13 @@ __all__ = [
     "PROFILE_STANDARD",
     "channel_identifier",
     "dmm_identifier",
+    "merged_entry_config",
 ]
+
+
+def merged_entry_config(entry: ConfigEntry) -> dict[str, Any]:
+    """Return config entry data overlaid with user options."""
+    return {**entry.data, **entry.options}
 
 
 def channel_identifier(entry_id: str, channel: int) -> str:

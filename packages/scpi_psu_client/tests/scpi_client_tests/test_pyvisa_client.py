@@ -68,7 +68,6 @@ async def test_client_compatibility_matrix(
         outp = await client.get_output()
         assert outp is True
 
-        # Test active control setpoints & readback round-trip
         target_v = round(min(max_v * 0.5, 12.0), 2)
         v_res = await client.set_voltage(target_v)
         assert v_res == target_v
@@ -81,13 +80,11 @@ async def test_client_compatibility_matrix(
             "current_setpoint": target_i,
         }
 
-        # Test output toggling round-trip
         assert await client.set_output(False) is False
         assert await client.get_output() is False
         assert await client.set_output(True) is True
         assert await client.get_output() is True
 
-        # Test voltage and current protection limit setpoints
         v_lim_res = await client.set_voltage_limit(max_v)
         assert v_lim_res == max_v
         i_lim_res = await client.set_current_limit(max_i)

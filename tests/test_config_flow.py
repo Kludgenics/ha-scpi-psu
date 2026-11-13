@@ -64,7 +64,6 @@ async def test_flow_user_step_and_confirm(hass: HomeAssistant) -> None:
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "user"
 
-    # Test connection failure error branch (client fails to connect)
     disconnected_client = _make_mock_client(is_connected=False)
     with patch(
         "custom_components.scpi_psu.config_flow.ScpiPsuClient",
@@ -80,7 +79,6 @@ async def test_flow_user_step_and_confirm(hass: HomeAssistant) -> None:
         assert err_result["errors"] == {"base": "cannot_connect"}
     disconnected_client.close.assert_awaited_once()
 
-    # Test successful probe -> confirm step -> entry creation with clamps
     connected_client = _make_mock_client()
     with patch(
         "custom_components.scpi_psu.config_flow.ScpiPsuClient",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -30,35 +30,66 @@ from custom_components.scpi_psu.scpi_psu_client import (
     ChannelTelemetry,
 )
 
+_STANDARD_DEFAULT_CH1 = {
+    FIELD_VOLTAGE,
+    FIELD_CURRENT,
+    FIELD_POWER,
+    FIELD_OUTPUT_ENABLED,
+    FIELD_STATUS_TEXT,
+    FIELD_OVP_TRIPPED,
+    FIELD_OCP_TRIPPED,
+}
+_OWON_DEFAULT_CH1 = _STANDARD_DEFAULT_CH1 | {FIELD_FAULT_ALARM, FIELD_OPP_TRIPPED}
 
-async def test_sensor_entities(hass: HomeAssistant) -> None:
+
+def _setup_coordinator(
+    hass: HomeAssistant,
+    entry_id: str,
+    data: ScpiPsuData | None = None,
+    *,
+    title: str = "Test PSU",
+) -> tuple[MockConfigEntry, ScpiPsuCoordinator]:
     entry = MockConfigEntry(
         domain=DOMAIN,
-        title="Test PSU",
+        title=title,
         data={CONF_SERIAL_PORT: "socket://127.0.0.1:5025"},
-        entry_id="test_sensor_entry",
+        entry_id=entry_id,
     )
     entry.add_to_hass(hass)
     coordinator = ScpiPsuCoordinator(hass, entry)
-    coordinator.data = ScpiPsuData(
-        system_error="0,No error",
-        channels={
-            1: ChannelTelemetry(
-                channel=1,
-                voltage=12.34,
-                current=1.5,
-                power=18.51,
-                status_text="Active",
-            )
-        },
-    )
+    if data is not None:
+        coordinator.data = data
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    return entry, coordinator
 
-    added: list[sensor.ScpiPsuSensor] = []
-    await sensor.async_setup_entry(
-        hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
+
+async def _collect_entities(
+    platform_mod: object, hass: HomeAssistant, entry: MockConfigEntry
+) -> list:
+    added: list = []
+    await platform_mod.async_setup_entry(hass, entry, added.extend)  # type: ignore[attr-defined]
+    return added
+
+
+async def test_sensor_entities(hass: HomeAssistant) -> None:
+    entry, coordinator = _setup_coordinator(
+        hass,
+        "test_sensor_entry",
+        ScpiPsuData(
+            system_error="0,No error",
+            channels={
+                1: ChannelTelemetry(
+                    channel=1,
+                    voltage=12.34,
+                    current=1.5,
+                    power=18.51,
+                    status_text="Active",
+                )
+            },
+        ),
     )
-    # Default device has no DMM, so all sensors except dmm are registered
+
+    added: list[sensor.ScpiPsuSensor] = await _collect_entities(sensor, hass, entry)
     assert len(added) == 5
 
     for ent in added:
@@ -79,9 +110,8 @@ async def test_sensor_entities(hass: HomeAssistant) -> None:
 
     for ent in added:
         await ent.async_will_remove_from_hass()
-    assert coordinator.active_fields_by_channel == coordinator.client.default_fields_by_channel()
+    assert coordinator.active_fields_by_channel == {1: _STANDARD_DEFAULT_CH1}
 
-    # Test when device has DMM capability (e.g. SPM6103)
     from custom_components.scpi_psu.scpi_psu_client.models import PsuIdentity
 
     coordinator.client.identity = PsuIdentity(
@@ -96,10 +126,7 @@ async def test_sensor_entities(hass: HomeAssistant) -> None:
         has_dmm=True,
     )
     coordinator.data.dmm_reading = 3.3
-    dmm_added: list[sensor.ScpiPsuSensor] = []
-    await sensor.async_setup_entry(
-        hass, entry, MagicMock(side_effect=lambda ents: dmm_added.extend(ents))
-    )
+    dmm_added: list[sensor.ScpiPsuSensor] = await _collect_entities(sensor, hass, entry)
     assert len(dmm_added) == 6
     dmm_map = {ent.entity_description.key: ent for ent in dmm_added}
     dmm_map["dmm"].hass = hass
@@ -110,33 +137,26 @@ async def test_sensor_entities(hass: HomeAssistant) -> None:
 
 
 async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Test PSU",
-        data={CONF_SERIAL_PORT: "socket://127.0.0.1:5025"},
-        entry_id="test_bin_sensor_entry",
+    entry, coordinator = _setup_coordinator(
+        hass,
+        "test_bin_sensor_entry",
+        ScpiPsuData(
+            connected=True,
+            responding=True,
+            channels={
+                1: ChannelTelemetry(
+                    channel=1,
+                    fault_alarm=False,
+                    ovp_tripped=False,
+                    ocp_tripped=True,
+                    opp_tripped=False,
+                )
+            },
+        ),
     )
-    entry.add_to_hass(hass)
-    coordinator = ScpiPsuCoordinator(hass, entry)
-    coordinator.data = ScpiPsuData(
-        connected=True,
-        responding=True,
-        channels={
-            1: ChannelTelemetry(
-                channel=1,
-                fault_alarm=False,
-                ovp_tripped=False,
-                ocp_tripped=True,
-                opp_tripped=False,
-            )
-        },
-    )
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    # Standard profile: 'connected', 'ovp_tripped', and 'ocp_tripped' are supported
-    std_added: list[binary_sensor.ScpiPsuBinarySensor] = []
-    await binary_sensor.async_setup_entry(
-        hass, entry, MagicMock(side_effect=lambda ents: std_added.extend(ents))
+    std_added: list[binary_sensor.ScpiPsuBinarySensor] = await _collect_entities(
+        binary_sensor, hass, entry
     )
     assert len(std_added) == 3
     std_keys = {b.entity_description.key for b in std_added}
@@ -146,13 +166,11 @@ async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
     assert std_map["ovp_tripped"].is_on is False
     assert std_map["ocp_tripped"].is_on is True
 
-    # OWON profile: all 5 binary sensors registered
     from custom_components.scpi_psu.scpi_psu_client.models import parse_idn
 
     coordinator.client.identity = parse_idn("OWON,SPE6103,123,1.0")
-    added: list[binary_sensor.ScpiPsuBinarySensor] = []
-    await binary_sensor.async_setup_entry(
-        hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
+    added: list[binary_sensor.ScpiPsuBinarySensor] = await _collect_entities(
+        binary_sensor, hass, entry
     )
     assert {e.entity_description.key for e in added} == {
         "fault",
@@ -179,25 +197,17 @@ async def test_binary_sensor_entities(hass: HomeAssistant) -> None:
 
     for ent in added:
         await ent.async_will_remove_from_hass()
-    assert coordinator.active_fields_by_channel == coordinator.client.default_fields_by_channel()
+    assert coordinator.active_fields_by_channel == {1: _OWON_DEFAULT_CH1}
 
 
 async def test_switch_entity(hass: HomeAssistant) -> None:
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Test PSU",
-        data={CONF_SERIAL_PORT: "socket://127.0.0.1:5025"},
-        entry_id="test_switch_entry",
+    entry, coordinator = _setup_coordinator(
+        hass,
+        "test_switch_entry",
+        ScpiPsuData(channels={1: ChannelTelemetry(channel=1, output_enabled=True)}),
     )
-    entry.add_to_hass(hass)
-    coordinator = ScpiPsuCoordinator(hass, entry)
-    coordinator.data = ScpiPsuData(channels={1: ChannelTelemetry(channel=1, output_enabled=True)})
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    added: list[switch.ScpiPsuOutputSwitch] = []
-    await switch.async_setup_entry(
-        hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
-    )
+    added: list[switch.ScpiPsuOutputSwitch] = await _collect_entities(switch, hass, entry)
     assert len(added) == 1
 
     sw = added[0]
@@ -214,18 +224,23 @@ async def test_switch_entity(hass: HomeAssistant) -> None:
         mock_set.assert_awaited_with(True, channel=1)
 
     await sw.async_will_remove_from_hass()
-    assert coordinator.active_fields_by_channel == coordinator.client.default_fields_by_channel()
+    assert coordinator.active_fields_by_channel == {1: _STANDARD_DEFAULT_CH1}
 
 
 async def test_multichannel_switch_entities(hass: HomeAssistant) -> None:
-    entry = MockConfigEntry(
-        domain=DOMAIN,
+    entry, coordinator = _setup_coordinator(
+        hass,
+        "test_multi_switch_entry",
+        ScpiPsuData(
+            channel_count=3,
+            channels={
+                1: ChannelTelemetry(channel=1, output_enabled=True),
+                2: ChannelTelemetry(channel=2, output_enabled=False),
+                3: ChannelTelemetry(channel=3),
+            },
+        ),
         title="Rigol DP832",
-        data={CONF_SERIAL_PORT: "socket://127.0.0.1:5025"},
-        entry_id="test_multi_switch_entry",
     )
-    entry.add_to_hass(hass)
-    coordinator = ScpiPsuCoordinator(hass, entry)
     coordinator.client.identity = coordinator.identity.__class__(
         manufacturer="RIGOL",
         model="DP832",
@@ -237,20 +252,8 @@ async def test_multichannel_switch_entities(hass: HomeAssistant) -> None:
         hw_max_current=3.0,
         channels=3,
     )
-    coordinator.data = ScpiPsuData(
-        channel_count=3,
-        channels={
-            1: ChannelTelemetry(channel=1, output_enabled=True),
-            2: ChannelTelemetry(channel=2, output_enabled=False),
-            3: ChannelTelemetry(channel=3),
-        },
-    )
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    added: list[switch.SwitchEntity] = []
-    await switch.async_setup_entry(
-        hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
-    )
+    added: list[switch.SwitchEntity] = await _collect_entities(switch, hass, entry)
     assert len(added) == 4
     for ent in added:
         ent.hass = hass
@@ -289,24 +292,17 @@ async def test_multichannel_switch_entities(hass: HomeAssistant) -> None:
 
     for ent in added:
         await ent.async_will_remove_from_hass()
-    assert coordinator.active_fields_by_channel == coordinator.client.default_fields_by_channel()
+    assert coordinator.active_fields_by_channel == {
+        1: _STANDARD_DEFAULT_CH1,
+        2: {FIELD_OUTPUT_ENABLED},
+        3: {FIELD_OUTPUT_ENABLED},
+    }
 
 
 async def test_button_entity(hass: HomeAssistant) -> None:
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Test PSU",
-        data={CONF_SERIAL_PORT: "socket://127.0.0.1:5025"},
-        entry_id="test_button_entry",
-    )
-    entry.add_to_hass(hass)
-    coordinator = ScpiPsuCoordinator(hass, entry)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    entry, coordinator = _setup_coordinator(hass, "test_button_entry")
 
-    added: list[button.ScpiPsuResetButton] = []
-    await button.async_setup_entry(
-        hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
-    )
+    added: list[button.ScpiPsuResetButton] = await _collect_entities(button, hass, entry)
     assert len(added) == 1
 
     btn = added[0]
@@ -316,26 +312,18 @@ async def test_button_entity(hass: HomeAssistant) -> None:
 
 
 async def test_number_entities(hass: HomeAssistant) -> None:
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Test PSU",
-        data={CONF_SERIAL_PORT: "socket://127.0.0.1:5025"},
-        entry_id="test_number_entry",
+    entry, coordinator = _setup_coordinator(
+        hass,
+        "test_number_entry",
+        ScpiPsuData(
+            voltage_setpoint=5.0,
+            current_setpoint=2.0,
+            voltage_limit=30.0,
+            current_limit=5.0,
+        ),
     )
-    entry.add_to_hass(hass)
-    coordinator = ScpiPsuCoordinator(hass, entry)
-    coordinator.data = ScpiPsuData(
-        voltage_setpoint=5.0,
-        current_setpoint=2.0,
-        voltage_limit=30.0,
-        current_limit=5.0,
-    )
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    added: list[number.ScpiPsuNumber] = []
-    await number.async_setup_entry(
-        hass, entry, MagicMock(side_effect=lambda ents: added.extend(ents))
-    )
+    added: list[number.ScpiPsuNumber] = await _collect_entities(number, hass, entry)
     assert len(added) == 4
 
     num_map = {ent.entity_description.key: ent for ent in added}
@@ -347,17 +335,13 @@ async def test_number_entities(hass: HomeAssistant) -> None:
         await num_map["voltage_setpoint"].async_set_native_value(12.0)
         mock_v.assert_awaited_once_with(12.0)
 
-    # When hardware does not report protection limits, only setpoints are registered
     coordinator.data = ScpiPsuData(
         voltage_setpoint=5.0,
         current_setpoint=2.0,
         voltage_limit=None,
         current_limit=None,
     )
-    partial_added: list[number.ScpiPsuNumber] = []
-    await number.async_setup_entry(
-        hass, entry, MagicMock(side_effect=lambda ents: partial_added.extend(ents))
-    )
+    partial_added: list[number.ScpiPsuNumber] = await _collect_entities(number, hass, entry)
     assert len(partial_added) == 2
     assert {e.entity_description.key for e in partial_added} == {
         "voltage_setpoint",
@@ -366,20 +350,13 @@ async def test_number_entities(hass: HomeAssistant) -> None:
 
 
 async def test_number_entities_discovered_after_initial_failed_read(hass: HomeAssistant) -> None:
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Test PSU",
-        data={CONF_SERIAL_PORT: "socket://127.0.0.1:5025"},
+    entry, coordinator = _setup_coordinator(
+        hass,
+        "test_number_discovery_entry",
+        ScpiPsuData(voltage_setpoint=5.0, current_setpoint=2.0),
     )
-    entry.add_to_hass(hass)
-    coordinator = ScpiPsuCoordinator(hass, entry)
-    coordinator.data = ScpiPsuData(voltage_setpoint=5.0, current_setpoint=2.0)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    added: list[number.ScpiPsuNumber] = []
-    await number.async_setup_entry(
-        hass, entry, MagicMock(side_effect=lambda entities: added.extend(entities))
-    )
+    added: list[number.ScpiPsuNumber] = await _collect_entities(number, hass, entry)
     assert {entity.entity_description.key for entity in added} == {
         "voltage_setpoint",
         "current_setpoint",

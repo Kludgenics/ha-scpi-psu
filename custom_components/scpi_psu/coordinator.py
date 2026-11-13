@@ -8,10 +8,13 @@ import time
 from collections.abc import Awaitable, Callable, Collection, Iterable
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import ChildDeviceInfo, DeviceInfo
+from homeassistant.helpers.entity import Entity, EntityDescription
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 
 from .const import (
@@ -31,6 +34,7 @@ from .const import (
     PROFILE_AUTO,
     channel_identifier,
     dmm_identifier,
+    merged_entry_config,
 )
 from .scpi_psu_client import (
     FIELD_DMM,
@@ -109,22 +113,14 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
     ) -> None:
         """Initialize the coordinator."""
         self.entry = entry
-        cfg = {**entry.data, **entry.options}
+        cfg = merged_entry_config(entry)
         self.serial_url: str = cfg[CONF_SERIAL_PORT]
-        self.baudrate: int = int(cfg.get(CONF_BAUDRATE, DEFAULT_BAUDRATE))
+        baudrate = int(cfg.get(CONF_BAUDRATE, DEFAULT_BAUDRATE))
         scan_interval = int(cfg.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
-        self.configured_profile: str = cfg.get(CONF_PROFILE, PROFILE_AUTO)
+        configured_profile: str = cfg.get(CONF_PROFILE, PROFILE_AUTO)
 
-        self.max_voltage_clamp: float | None = (
-            float(cfg[CONF_MAX_VOLTAGE_CLAMP])
-            if cfg.get(CONF_MAX_VOLTAGE_CLAMP) is not None
-            else None
-        )
-        self.max_current_clamp: float | None = (
-            float(cfg[CONF_MAX_CURRENT_CLAMP])
-            if cfg.get(CONF_MAX_CURRENT_CLAMP) is not None
-            else None
-        )
+        self.max_voltage_clamp = self._optional_float(cfg.get(CONF_MAX_VOLTAGE_CLAMP))
+        self.max_current_clamp = self._optional_float(cfg.get(CONF_MAX_CURRENT_CLAMP))
 
         initial_idn = cfg.get(CONF_IDN)
         self.parent_device_id: str | None = None
@@ -139,11 +135,9 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
 
         self.client = ScpiPsuClient(
             serial_url=self.serial_url,
-            baudrate=self.baudrate,
+            baudrate=baudrate,
             initial_idn=initial_idn,
-            profile_key=self.configured_profile
-            if self.configured_profile != PROFILE_AUTO
-            else None,
+            profile_key=configured_profile if configured_profile != PROFILE_AUTO else None,
             command_delay=command_delay,
             write_delay=write_delay,
         )
@@ -182,49 +176,58 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
     def profile(self) -> ScpiProfile:
         return self.client.profile
 
-    @property
-    def effective_max_voltage(self) -> float:
-        hw_max = self.identity.hw_max_voltage
-        if self.max_voltage_clamp is not None and self.max_voltage_clamp > 0:
-            return min(hw_max, self.max_voltage_clamp)
+    @staticmethod
+    def _optional_float(value: Any) -> float | None:
+        return float(value) if value is not None else None
+
+    @staticmethod
+    def _effective_limit(hw_max: float, clamp: float | None) -> float:
+        if clamp is not None and clamp > 0:
+            return min(hw_max, clamp)
         return hw_max
 
     @property
+    def effective_max_voltage(self) -> float:
+        return self._effective_limit(self.identity.hw_max_voltage, self.max_voltage_clamp)
+
+    @property
     def effective_max_current(self) -> float:
-        hw_max = self.identity.hw_max_current
-        if self.max_current_clamp is not None and self.max_current_clamp > 0:
-            return min(hw_max, self.max_current_clamp)
-        return hw_max
+        return self._effective_limit(self.identity.hw_max_current, self.max_current_clamp)
+
+    @property
+    def _device_title(self) -> str:
+        return self.entry.title or self.identity.default_title
 
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, self.entry.entry_id)},
-            name=self.entry.title or self.identity.default_title,
+            name=self._device_title,
             manufacturer=self.identity.manufacturer,
             model=self.identity.model,
             serial_number=self.identity.serial_number,
             sw_version=self.identity.firmware,
         )
 
-    def channel_device_info(self, channel: int = 1) -> DeviceInfo | ChildDeviceInfo:
-        if self.identity.channels <= 1 or self.parent_device_id is None:
+    def _child_device_info(self, identifier: str, suffix: str) -> DeviceInfo | ChildDeviceInfo:
+        if self.parent_device_id is None:
             return self.device_info
         return ChildDeviceInfo(
-            identifiers={(DOMAIN, channel_identifier(self.entry.entry_id, channel))},
-            name=f"{self.entry.title or self.identity.default_title} Channel {channel}",
+            identifiers={(DOMAIN, identifier)},
+            name=f"{self._device_title} {suffix}",
             parent_device_id=self.parent_device_id,
+        )
+
+    def channel_device_info(self, channel: int = 1) -> DeviceInfo | ChildDeviceInfo:
+        if self.identity.channels <= 1:
+            return self.device_info
+        return self._child_device_info(
+            channel_identifier(self.entry.entry_id, channel), f"Channel {channel}"
         )
 
     @property
     def dmm_device_info(self) -> DeviceInfo | ChildDeviceInfo:
-        if self.parent_device_id is None:
-            return self.device_info
-        return ChildDeviceInfo(
-            identifiers={(DOMAIN, dmm_identifier(self.entry.entry_id))},
-            name=f"{self.entry.title or self.identity.default_title} Multimeter",
-            parent_device_id=self.parent_device_id,
-        )
+        return self._child_device_info(dmm_identifier(self.entry.entry_id), "Multimeter")
 
     async def async_close(self) -> None:
         await self.client.close()
@@ -273,25 +276,18 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         for channel, fields in requested_fields.items():
             snap = all_telemetry.get(channel, TelemetrySnapshot(channel=channel))
             self._state.apply_telemetry(snap, fields)
-        for channel, snap in all_telemetry.items():
-            if channel not in requested_fields:
-                self._state.apply_telemetry(snap)
 
         now = time.monotonic()
         if now - self._last_full_poll >= FULL_POLL_INTERVAL or self._state.voltage_setpoint is None:
-            registers = await self.client.get_config_registers()
-            for key in ("voltage_limit", "current_limit", "voltage_setpoint", "current_setpoint"):
-                if registers[key] is not None:
-                    setattr(self._state, key, registers[key])
-
+            updates = await self.client.get_config_registers()
             self._state.system_error = await self.client.get_system_error()
             self._last_full_poll = now
         else:
-            setpoints = await self.client.get_setpoints()
-            if setpoints["voltage_setpoint"] is not None:
-                self._state.voltage_setpoint = setpoints["voltage_setpoint"]
-            if setpoints["current_setpoint"] is not None:
-                self._state.current_setpoint = setpoints["current_setpoint"]
+            updates = await self.client.get_setpoints()
+
+        for key, value in updates.items():
+            if value is not None:
+                setattr(self._state, key, value)
 
         self._state.connected = self.client.is_connected
         return self._state
@@ -315,6 +311,12 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             value = ceiling
         return max(0.0, value)
 
+    def _apply_channel_snapshot(self, snap: TelemetrySnapshot | None) -> None:
+        if snap is not None:
+            self._state.apply_telemetry(
+                snap, self.active_fields_by_channel.get(snap.channel, set())
+            )
+
     async def async_set_output(self, enabled: bool, channel: int = 1) -> None:
         try:
             actual = await self.client.set_output(enabled, channel=channel)
@@ -326,9 +328,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         self._state.set_output(channel, actual)
         if snap is not None:
             snap.output_enabled = actual
-            self._state.apply_telemetry(
-                snap, self.client.default_fields_by_channel().get(snap.channel, set())
-            )
+            self._apply_channel_snapshot(snap)
         self._publish_state()
 
     async def async_set_all_outputs(self, enabled: bool) -> None:
@@ -340,10 +340,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             self._state.invalidate_outputs(range(1, self.identity.channels + 1))
             self._publish_state()
             raise
-        if snap is not None:
-            self._state.apply_telemetry(
-                snap, self.client.default_fields_by_channel().get(snap.channel, set())
-            )
+        self._apply_channel_snapshot(snap)
         for ch in range(1, self.identity.channels + 1):
             self._state.set_output(ch, actual)
         self._publish_state()
@@ -411,10 +408,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         try:
             await self.client.clear_faults()
             snap = await self.client.poll_telemetry()
-            if snap is not None:
-                self._state.apply_telemetry(
-                    snap, self.client.default_fields_by_channel().get(snap.channel, set())
-                )
+            self._apply_channel_snapshot(snap)
             self._state.system_error = await self.client.get_system_error()
         except Exception, asyncio.CancelledError:
             self._state.system_error = None
@@ -440,3 +434,45 @@ class ScpiPsuEntity(CoordinatorEntity[ScpiPsuCoordinator]):
         for field_name, ch in self._tracked_fields:
             self.coordinator.unregister_field_interest(field_name, channel=ch)
         await super().async_will_remove_from_hass()
+
+
+@dataclass(frozen=True, kw_only=True)
+class ScpiDescriptionMixin[ValueT](EntityDescription):
+    """Shared declarative fields for SCPI PSU entity descriptions."""
+
+    value_fn: Callable[[ScpiPsuData], ValueT]
+    measurement_field: str | None = None
+    is_supported_fn: Callable[[ScpiPsuCoordinator], bool] = lambda _: True
+    device_info_fn: Callable[[ScpiPsuCoordinator], DeviceInfo | ChildDeviceInfo] = lambda coord: (
+        coord.channel_device_info(1)
+    )
+
+
+class ScpiPsuDescribedEntity[DescT: ScpiDescriptionMixin[Any]](ScpiPsuEntity):
+    """Base entity initialized from a declarative description."""
+
+    def __init__(self, coordinator: ScpiPsuCoordinator, description: DescT) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
+        self._attr_device_info = description.device_info_fn(coordinator)
+        if description.measurement_field:
+            self._tracked_fields = ((description.measurement_field, 1),)
+
+
+def setup_described_entities[DescT: ScpiDescriptionMixin[Any]](
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+    descriptions: Iterable[DescT],
+    entity_cls: Callable[[ScpiPsuCoordinator, DescT], Entity],
+) -> None:
+    """Register supported described entities for a config entry."""
+    coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities(
+        [
+            entity_cls(coordinator, description)
+            for description in descriptions
+            if description.is_supported_fn(coordinator)
+        ]
+    )

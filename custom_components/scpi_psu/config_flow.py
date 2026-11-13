@@ -31,6 +31,7 @@ from .const import (
     PROFILE_AUTO,
     PROFILE_OWON,
     PROFILE_STANDARD,
+    merged_entry_config,
 )
 from .scpi_psu_client import PsuIdentity, ScpiPsuClient
 
@@ -93,6 +94,50 @@ async def _async_probe_psu(serial_url: str, baudrate: int) -> PsuIdentity:
         await client.close()
 
 
+async def _async_probe_with_errors(
+    serial_url: str, baudrate: int, errors: dict[str, str]
+) -> PsuIdentity | None:
+    """Probe SCPI PSU identity, recording cannot_connect in errors on failure."""
+    try:
+        return await _async_probe_psu(serial_url, baudrate)
+    except (OSError, SerialException, TimeoutError) as err:
+        _LOGGER.warning("Failed to probe SCPI PSU at %s: %s", serial_url, err)
+        errors["base"] = "cannot_connect"
+        return None
+
+
+def _parse_connection_input(user_input: dict[str, Any]) -> tuple[str, int]:
+    """Extract normalized serial URL and baudrate from user input."""
+    return user_input[CONF_SERIAL_PORT].strip(), int(user_input[CONF_BAUDRATE])
+
+
+def _profile_and_clamp_schema(
+    *,
+    profile_default: str = PROFILE_AUTO,
+    v_clamp_suggested: float | None = None,
+    i_clamp_suggested: float | None = None,
+) -> dict[Any, Any]:
+    v_opt = (
+        probatio.Optional(
+            CONF_MAX_VOLTAGE_CLAMP, description={"suggested_value": v_clamp_suggested}
+        )
+        if v_clamp_suggested is not None
+        else probatio.Optional(CONF_MAX_VOLTAGE_CLAMP)
+    )
+    i_opt = (
+        probatio.Optional(
+            CONF_MAX_CURRENT_CLAMP, description={"suggested_value": i_clamp_suggested}
+        )
+        if i_clamp_suggested is not None
+        else probatio.Optional(CONF_MAX_CURRENT_CLAMP)
+    )
+    return {
+        probatio.Required(CONF_PROFILE, default=profile_default): PROFILE_SELECTOR,
+        v_opt: VOLTAGE_CLAMP_SELECTOR,
+        i_opt: CURRENT_CLAMP_SELECTOR,
+    }
+
+
 def _clean_optional_float(val: Any) -> float | None:
     """Convert optional selector value to positive float or None."""
     if val in (None, "", 0, 0.0):
@@ -120,18 +165,14 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            self._serial_url = user_input[CONF_SERIAL_PORT].strip()
-            self._baudrate = int(user_input[CONF_BAUDRATE])
+            self._serial_url, self._baudrate = _parse_connection_input(user_input)
 
-            try:
-                self._identity = await _async_probe_psu(self._serial_url, self._baudrate)
-            except (OSError, SerialException, TimeoutError) as err:
-                _LOGGER.warning("Failed to probe SCPI PSU at %s: %s", self._serial_url, err)
-                errors["base"] = "cannot_connect"
-            else:
+            identity = await _async_probe_with_errors(self._serial_url, self._baudrate, errors)
+            if identity is not None:
+                self._identity = identity
                 unique_key = (
-                    f"{self._identity.manufacturer}_{self._identity.model}_{self._identity.serial_number}".lower()
-                    if self._identity.serial_number
+                    f"{identity.manufacturer}_{identity.model}_{identity.serial_number}".lower()
+                    if identity.serial_number
                     else f"serialx_{self._serial_url}"
                 )
                 await self.async_set_unique_id(unique_key)
@@ -181,9 +222,7 @@ class ScpiPsuConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_NAME,
                     description={"suggested_value": self._identity.default_title},
                 ): selector.TextSelector(),
-                probatio.Required(CONF_PROFILE, default=PROFILE_AUTO): PROFILE_SELECTOR,
-                probatio.Optional(CONF_MAX_VOLTAGE_CLAMP): VOLTAGE_CLAMP_SELECTOR,
-                probatio.Optional(CONF_MAX_CURRENT_CLAMP): CURRENT_CLAMP_SELECTOR,
+                **_profile_and_clamp_schema(),
             }
         )
 
@@ -211,19 +250,15 @@ class ScpiPsuOptionsFlow(OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
-        current_cfg = {**self._entry.data, **self._entry.options}
+        current_cfg = merged_entry_config(self._entry)
         current_port = current_cfg.get(CONF_SERIAL_PORT, "")
         current_baud = int(current_cfg.get(CONF_BAUDRATE, DEFAULT_BAUDRATE))
         if user_input is not None:
-            serial_url = user_input[CONF_SERIAL_PORT].strip()
-            baudrate = int(user_input[CONF_BAUDRATE])
-            try:
-                if serial_url != current_port or baudrate != current_baud:
-                    await _async_probe_psu(serial_url, baudrate)
-            except (OSError, SerialException, TimeoutError) as err:
-                _LOGGER.warning("Failed to probe SCPI PSU at %s: %s", serial_url, err)
-                errors["base"] = "cannot_connect"
-            else:
+            serial_url, baudrate = _parse_connection_input(user_input)
+            probe_ok = True
+            if serial_url != current_port or baudrate != current_baud:
+                probe_ok = await _async_probe_with_errors(serial_url, baudrate, errors) is not None
+            if probe_ok:
                 cleaned = {
                     CONF_SERIAL_PORT: serial_url,
                     CONF_BAUDRATE: baudrate,
@@ -238,9 +273,7 @@ class ScpiPsuOptionsFlow(OptionsFlow):
                 }
                 return self.async_create_entry(title="", data=cleaned)
 
-        cfg = {**self._entry.data, **self._entry.options, **(user_input or {})}
-        v_clamp_default = cfg.get(CONF_MAX_VOLTAGE_CLAMP)
-        i_clamp_default = cfg.get(CONF_MAX_CURRENT_CLAMP)
+        cfg = {**current_cfg, **(user_input or {})}
 
         schema_dict: dict[Any, Any] = {
             probatio.Required(
@@ -249,17 +282,11 @@ class ScpiPsuOptionsFlow(OptionsFlow):
             probatio.Required(
                 CONF_BAUDRATE, default=int(cfg.get(CONF_BAUDRATE, DEFAULT_BAUDRATE))
             ): BAUDRATE_SELECTOR,
-            probatio.Required(
-                CONF_PROFILE, default=cfg.get(CONF_PROFILE, PROFILE_AUTO)
-            ): PROFILE_SELECTOR,
-            probatio.Optional(
-                CONF_MAX_VOLTAGE_CLAMP,
-                description={"suggested_value": v_clamp_default},
-            ): VOLTAGE_CLAMP_SELECTOR,
-            probatio.Optional(
-                CONF_MAX_CURRENT_CLAMP,
-                description={"suggested_value": i_clamp_default},
-            ): CURRENT_CLAMP_SELECTOR,
+            **_profile_and_clamp_schema(
+                profile_default=cfg.get(CONF_PROFILE, PROFILE_AUTO),
+                v_clamp_suggested=cfg.get(CONF_MAX_VOLTAGE_CLAMP),
+                i_clamp_suggested=cfg.get(CONF_MAX_CURRENT_CLAMP),
+            ),
             probatio.Required(
                 CONF_SCAN_INTERVAL,
                 default=int(cfg.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),

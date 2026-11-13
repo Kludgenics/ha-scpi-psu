@@ -392,6 +392,10 @@ devices:
       - q: "INST:NSEL 1"
       - q: "INST:NSEL 2"
       - q: "INST:NSEL 3"
+      - q: "VOLT:PROT:TRIP?"
+        r: "0"
+      - q: "CURR:PROT:TRIP?"
+        r: "0"
     properties:
       voltage_meas:
         default: 24.0
@@ -532,6 +536,10 @@ devices:
       - q: "INST:NSEL 1"
       - q: "INST:NSEL 2"
       - q: "INST:NSEL 3"
+      - q: "VOLT:PROT:TRIP?"
+        r: "0"
+      - q: "CURR:PROT:TRIP?"
+        r: "0"
     properties:
       voltage_meas:
         default: 18.0
@@ -674,6 +682,10 @@ devices:
       - q: "INST:NSEL 3"
       - q: "MEAS:VOLT:DC?"
         r: "5.012"
+      - q: "VOLT:PROT:TRIP?"
+        r: "0"
+      - q: "CURR:PROT:TRIP?"
+        r: "0"
     properties:
       voltage_meas:
         default: 15.0
@@ -815,6 +827,10 @@ devices:
       - q: "INST:NSEL 2"
       - q: "INST:NSEL 3"
       - q: "INST:NSEL 4"
+      - q: "VOLT:PROT:TRIP?"
+        r: "0"
+      - q: "CURR:PROT:TRIP?"
+        r: "0"
     properties:
       voltage_meas:
         default: 32.0

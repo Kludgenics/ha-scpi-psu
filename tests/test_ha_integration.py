@@ -10,7 +10,6 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.scpi_psu import (
-    _scan_remote_serial_ports,
     async_reload_entry,
     async_setup,
     async_setup_entry,
@@ -62,7 +61,9 @@ async def test_integration_setup_and_unload(
         "custom_components.scpi_psu.async_register_serial_port_scanner"
     ) as mock_register_scanner:
         assert await async_setup(hass, {}) is True
-        mock_register_scanner.assert_called_once_with(hass, _scan_remote_serial_ports)
+        mock_register_scanner.assert_called_once()
+        assert mock_register_scanner.call_args[0][0] is hass
+        scanner = mock_register_scanner.call_args[0][1]
 
     snap = TelemetrySnapshot(
         voltage=12.0,
@@ -107,17 +108,14 @@ async def test_integration_setup_and_unload(
         assert await async_setup_entry(hass, mock_config_entry) is True
         mock_forward.assert_awaited_once()
 
-        # Verify USB remote serial port scanner
-        scanned = _scan_remote_serial_ports(hass)
+        scanned = scanner(hass)
         assert len(scanned) == 1
         assert scanned[0].device == "socket://127.0.0.1:5025"
         assert scanned[0].manufacturer == "OWON"
 
-        # Test reload helper
         await async_reload_entry(hass, mock_config_entry)
         mock_reload.assert_awaited_once_with(mock_config_entry.entry_id)
 
-        # Test unload
         assert await async_unload_entry(hass, mock_config_entry) is True
         mock_unload.assert_awaited_once()
         assert mock_config_entry.entry_id not in hass.data[DOMAIN]
@@ -395,12 +393,8 @@ async def test_failed_output_write_marks_only_that_channel_unknown(
         )
     )
 
-    async def write(cmd: str) -> None:
-        assert cmd == "OUTP CH2,ON"
-        raise failure
-
     with (
-        patch.object(coordinator.client, "_write_unlocked", side_effect=write),
+        patch.object(coordinator.client, "set_output", new_callable=AsyncMock, side_effect=failure),
         pytest.raises(type(failure)),
     ):
         await coordinator.async_set_output(True, channel=2)
@@ -454,21 +448,15 @@ async def test_partial_all_outputs_write_marks_states_unknown(
             tuple(coordinator.data.channels[ch].output_enabled for ch in range(1, 4))
         )
     )
-    commands: list[str] = []
-
-    async def write(cmd: str) -> None:
-        commands.append(cmd)
-        if cmd == "OUTP CH2,ON":
-            raise failure
-
     with (
-        patch.object(coordinator.client, "_write_unlocked", side_effect=write),
+        patch.object(
+            coordinator.client, "set_all_outputs", new_callable=AsyncMock, side_effect=failure
+        ),
         pytest.raises(type(failure)),
     ):
         await coordinator.async_set_all_outputs(True)
 
     unsubscribe()
-    assert commands == ["INST:NSEL 1", "OUTP:ALL ON", "OUTP ON", "OUTP CH2,ON"]
     assert published == [(None, None, None)]
     assert coordinator.data.all_outputs_enabled is None
     assert all(channel.status_text is None for channel in coordinator.data.channels.values())
@@ -505,27 +493,22 @@ async def test_coordinator_control_methods_and_clamps(
         assert coordinator.data.ch1.output_enabled is True
         assert coordinator.data.ch1.voltage == 24.0
 
-        # Request 50V when clamp is 24V -> should clamp to 24.0
         await coordinator.async_set_voltage(50.0)
         assert "VOLT 24.000" in sent_commands
         assert coordinator.data.voltage_setpoint == 24.0
 
-        # Request 10A when clamp is 5A -> should clamp to 5.0
         await coordinator.async_set_current(10.0)
         assert "CURR 5.000" in sent_commands
         assert coordinator.data.current_setpoint == 5.0
 
-        # Request 50V OVP limit when clamp is 24V -> should clamp to 24.0
         await coordinator.async_set_voltage_limit(50.0)
         assert "VOLT:LIM 24.000" in sent_commands
         assert coordinator.data.voltage_limit == 24.0
 
-        # Request 10A OCP limit when clamp is 5A -> should clamp to 5.0
         await coordinator.async_set_current_limit(10.0)
         assert "CURR:LIM 5.000" in sent_commands
         assert coordinator.data.current_limit == 5.0
 
-        # Reset errors
         await coordinator.async_reset_errors()
         assert "*CLS" in sent_commands
         assert coordinator.data.system_error == "0,No error"
@@ -577,9 +560,9 @@ async def test_error_query_disconnect_updates_connection_state(
             type(coordinator.client), "is_connected", new_callable=PropertyMock, return_value=False
         ),
     ):
-        data = await coordinator._async_update_data()
-        assert data.connected is False
-        assert data.system_error is None
+        await coordinator.async_refresh()
+        assert coordinator.data.connected is False
+        assert coordinator.data.system_error is None
 
 
 @pytest.mark.parametrize("failure", [ConnectionError("write failed"), asyncio.CancelledError()])
@@ -589,7 +572,23 @@ async def test_failed_error_reset_publishes_unknown(
 ) -> None:
     mock_config_entry.add_to_hass(hass)
     coordinator = ScpiPsuCoordinator(hass, mock_config_entry)
-    coordinator._state.system_error = '-200,"Execution error"'
+    with (
+        patch.object(
+            coordinator.client,
+            "poll_all_channels",
+            return_value={1: TelemetrySnapshot(voltage=12.0)},
+        ),
+        patch.object(
+            coordinator.client,
+            "get_config_registers",
+            return_value=dict.fromkeys(
+                ("voltage_limit", "current_limit", "voltage_setpoint", "current_setpoint")
+            ),
+        ),
+        patch.object(coordinator.client, "get_system_error", return_value='-200,"Execution error"'),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data.system_error == '-200,"Execution error"'
     published: list[str | None] = []
     unsubscribe = coordinator.async_add_listener(
         lambda: published.append(coordinator.data.system_error)

@@ -176,9 +176,7 @@ async def test_midline_fragment_across_packets_reassembles_and_recovers() -> Non
         return_value=(reader, writer),
     ):
         await client.connect()
-        # Feed initial mid-line chunk (segment 1) after connection established
         reader.feed_data(b"Abestop,AT6301,2532")
-        # Now feed remaining chunk with terminator (segment 2)
         reader.feed_data(b"0554,FV:V6.0.0\r\n")
         ident = await client.probe_identity()
         assert ident.raw_idn == "Abestop,AT6301,25320554,FV:V6.0.0"

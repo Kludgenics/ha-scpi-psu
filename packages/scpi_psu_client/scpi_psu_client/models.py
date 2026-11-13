@@ -7,8 +7,11 @@ from dataclasses import dataclass
 from dataclasses import fields as dataclass_fields
 
 DEFAULT_BAUDRATE = 115200
+DEFAULT_HW_SPECS: tuple[float, float, int] = (60.0, 10.0, 1)
 PROFILE_OWON = "owon"
 PROFILE_STANDARD = "standard"
+STATUS_ACTIVE = "Active"
+STATUS_STANDBY = "Standby / Output Off"
 
 
 @dataclass(frozen=True)
@@ -51,7 +54,7 @@ class ChannelTelemetry:
     ovp_tripped: bool | None = None
     ocp_tripped: bool | None = None
     opp_tripped: bool | None = None
-    status_text: str | None = "Active"
+    status_text: str | None = STATUS_ACTIVE
     fault_alarm: bool | None = None
 
     def update_snapshot(
@@ -131,6 +134,7 @@ OWON_MODEL_PREFIXES = ("AT6", "SPE", "SPM", "P4", "ODP")
 def parse_idn(raw_idn: str | None) -> PsuIdentity:
     """Parse an IEEE 488.2 *IDN? response and select the matching SCPI profile."""
     if not raw_idn or "," not in raw_idn:
+        hw_v, hw_i, channels = DEFAULT_HW_SPECS
         return PsuIdentity(
             manufacturer="SCPI",
             model="Power Supply",
@@ -138,14 +142,14 @@ def parse_idn(raw_idn: str | None) -> PsuIdentity:
             firmware=None,
             raw_idn=raw_idn or "",
             profile_key=PROFILE_STANDARD,
-            hw_max_voltage=60.0,
-            hw_max_current=10.0,
-            channels=1,
+            hw_max_voltage=hw_v,
+            hw_max_current=hw_i,
+            channels=channels,
             has_dmm=False,
         )
 
     parts = [p.strip() for p in raw_idn.split(",")]
-    manufacturer = parts[0] if len(parts) >= 1 and parts[0] else "SCPI"
+    manufacturer = parts[0] or "SCPI"
     model = parts[1] if len(parts) >= 2 and parts[1] else "PSU"
     serial_number = (
         parts[2] if len(parts) >= 3 and parts[2] and parts[2] not in ("0", "N/A", "NONE") else None
@@ -162,7 +166,7 @@ def parse_idn(raw_idn: str | None) -> PsuIdentity:
 
     profile_key = PROFILE_OWON if is_owon else PROFILE_STANDARD
 
-    hw_v, hw_i, channels = KNOWN_MODEL_SPECS.get(model_upper, (60.0, 10.0, 1))
+    hw_v, hw_i, channels = KNOWN_MODEL_SPECS.get(model_upper, DEFAULT_HW_SPECS)
 
     return PsuIdentity(
         manufacturer=manufacturer,

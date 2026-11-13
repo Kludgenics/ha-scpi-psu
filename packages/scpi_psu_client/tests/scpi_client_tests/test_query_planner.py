@@ -22,7 +22,6 @@ from scpi_psu_client.query_planner import (
 def test_query_planner_owon_profile() -> None:
     owon_planner = QueryPlanner(OwonScpiProfile(), has_dmm=True)
 
-    # When multiple fields are requested, OWON selects composite MEAS:ALL:INFO?
     plan = owon_planner.plan_queries({FIELD_VOLTAGE, FIELD_CURRENT, FIELD_POWER, FIELD_STATUS_TEXT})
     assert len(plan) == 1
     assert plan[0].command == "MEAS:ALL:INFO?"
@@ -34,7 +33,6 @@ def test_query_planner_owon_profile() -> None:
     assert parsed[FIELD_POWER] == 15.0
     assert parsed[FIELD_STATUS_TEXT] == "Constant Voltage (CV)"
 
-    # When DMM is also requested, DMM is appended as an independent descriptor
     dmm_plan = owon_planner.plan_queries({FIELD_VOLTAGE, FIELD_DMM})
     assert len(dmm_plan) == 2
     assert dmm_plan[0].command == "MEAS:ALL:INFO?"
@@ -44,14 +42,12 @@ def test_query_planner_owon_profile() -> None:
 def test_query_planner_standard_scpi_compound_pipeline() -> None:
     std_planner = QueryPlanner(StandardScpiProfile(), has_dmm=False)
 
-    # When multiple fields are needed on Standard SCPI, they are bundled into 1 semicolon compound query
     plan_std = std_planner.plan_queries(
         {FIELD_VOLTAGE, FIELD_CURRENT, FIELD_POWER, FIELD_OUTPUT_ENABLED}
     )
     assert len(plan_std) == 1
     assert plan_std[0].command == "MEAS:VOLT?;:MEAS:CURR?;:MEAS:POW?;:OUTP?"
 
-    # Semicolon parser cleanly unpacks the compound response
     assert plan_std[0].parser is not None
     parsed = plan_std[0].parser("15.500 ; 2.300 ; 35.650 ; ON")
     assert parsed[FIELD_VOLTAGE] == 15.5
@@ -59,7 +55,6 @@ def test_query_planner_standard_scpi_compound_pipeline() -> None:
     assert parsed[FIELD_POWER] == 35.65
     assert parsed[FIELD_OUTPUT_ENABLED] is True
 
-    # When only 1 scalar field is needed, it remains a single discrete query (no semicolons)
     single_plan = std_planner.plan_queries({FIELD_VOLTAGE})
     assert len(single_plan) == 1
     assert single_plan[0].command == "MEAS:VOLT?"
@@ -90,7 +85,6 @@ async def test_partial_telemetry_and_channel_field_interest() -> None:
         return ""
 
     with mock_serial_responder(_responder):
-        # 1. Poll only current (voltage sensor disabled by user) -> succeeds with voltage=None
         snap_curr = await client.poll_telemetry(channel=1, needed_fields={FIELD_CURRENT})
         assert snap_curr is not None
         assert snap_curr.current == 1.75
@@ -98,7 +92,6 @@ async def test_partial_telemetry_and_channel_field_interest() -> None:
         assert snap_curr.power is None
         assert [cmd for cmd in queried_commands if "?" in cmd] == ["MEAS:CURR?"]
 
-        # 2. Poll only status_text on Standard SCPI -> covered by OUTP? without needing voltage/current
         queried_commands.clear()
         snap_status = await client.poll_telemetry(channel=1, needed_fields={FIELD_STATUS_TEXT})
         assert snap_status is not None
@@ -106,7 +99,6 @@ async def test_partial_telemetry_and_channel_field_interest() -> None:
         assert snap_status.status_text == "Active"
         assert [cmd for cmd in queried_commands if "?" in cmd] == ["OUTP?"]
 
-        # 3. Poll all channels with per-channel field map (CH1: current, CH2: output_enabled)
         queried_commands.clear()
         all_snaps = await client.poll_all_channels(
             needed_fields_by_channel={
@@ -179,21 +171,16 @@ def test_compound_query_error_and_corrupt_parsing() -> None:
     parser = plan[0].parser
     assert parser is not None
 
-    # Normal success
     res_good = parser("12.000 ; 1.500 ; ON")
     assert res_good[FIELD_VOLTAGE] == 12.0
     assert res_good[FIELD_CURRENT] == 1.5
     assert res_good[FIELD_OUTPUT_ENABLED] is True
 
-    # Truncated response (fewer tokens than queries) -> safely drops frame
     assert parser("12.000 ; 1.500") == {}
-    # Extra tokens -> safely drops frame
     assert parser("12.000 ; 1.500 ; ON ; EXTRA") == {}
-    # Empty string or None -> safely drops frame
     assert parser("") == {}
     assert parser(None) == {}
 
-    # Corrupt scalar within compound -> only valid scalar fields are extracted
     res_bad_curr = parser("12.000 ; GARBAGE ; ON")
     assert res_bad_curr[FIELD_VOLTAGE] == 12.0
     assert FIELD_CURRENT not in res_bad_curr
