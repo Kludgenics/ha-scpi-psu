@@ -126,7 +126,7 @@ async def test_ha_integration_compatibility_matrix(
             assert coordinator.data.dmm_reading == expected_telemetry["dmm"]
 
         sensors: list[sensor.ScpiPsuSensor] = await _collect(sensor, hass, entry)
-        sensor_dict = {s.entity_description.key: s.native_value for s in sensors}
+        sensor_dict = {s.entity_description.key: s.native_value for s in sensors if s.channel == 1}
         assert sensor_dict["voltage"] == expected_telemetry["voltage"]
         assert sensor_dict["current"] == expected_telemetry["current"]
         assert sensor_dict["power"] == expected_telemetry["power"]

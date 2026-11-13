@@ -29,7 +29,8 @@ class ScpiPsuNumberEntityDescription(ScpiDescriptionMixin[float | None], NumberE
     """Describes SCPI PSU number entity."""
 
     max_fn: Callable[[ScpiPsuCoordinator], float]
-    set_fn: Callable[[ScpiPsuCoordinator, float], Awaitable[None]]
+    set_fn: Callable[[ScpiPsuCoordinator, float, int], Awaitable[None]]
+    is_channel_supported_fn: Callable[[ScpiPsuCoordinator, int], bool] = lambda _coord, _ch: True
 
 
 NUMBERS: tuple[ScpiPsuNumberEntityDescription, ...] = (
@@ -41,9 +42,12 @@ NUMBERS: tuple[ScpiPsuNumberEntityDescription, ...] = (
         native_min_value=0.0,
         native_step=0.01,
         mode=NumberMode.BOX,
-        value_fn=lambda d: d.voltage_setpoint,
+        per_channel=True,
+        channel_value_fn=lambda d, ch: d.get_channel_config(ch, "voltage_setpoint"),
         max_fn=lambda coord: coord.effective_max_voltage,
-        set_fn=lambda coord, val: coord.async_set_voltage(val),
+        set_fn=lambda coord, val, ch: (
+            coord.async_set_voltage(val) if ch == 1 else coord.async_set_voltage(val, channel=ch)
+        ),
     ),
     ScpiPsuNumberEntityDescription(
         key="current_setpoint",
@@ -51,11 +55,14 @@ NUMBERS: tuple[ScpiPsuNumberEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
         device_class=NumberDeviceClass.CURRENT,
         native_min_value=0.0,
-        native_step=0.01,
+        native_step=0.001,
         mode=NumberMode.BOX,
-        value_fn=lambda d: d.current_setpoint,
+        per_channel=True,
+        channel_value_fn=lambda d, ch: d.get_channel_config(ch, "current_setpoint"),
         max_fn=lambda coord: coord.effective_max_current,
-        set_fn=lambda coord, val: coord.async_set_current(val),
+        set_fn=lambda coord, val, ch: (
+            coord.async_set_current(val) if ch == 1 else coord.async_set_current(val, channel=ch)
+        ),
     ),
     ScpiPsuNumberEntityDescription(
         key="overvoltage_limit",
@@ -66,10 +73,17 @@ NUMBERS: tuple[ScpiPsuNumberEntityDescription, ...] = (
         native_min_value=0.0,
         native_step=0.1,
         mode=NumberMode.BOX,
-        value_fn=lambda d: d.voltage_limit,
+        per_channel=True,
+        channel_value_fn=lambda d, ch: d.get_channel_config(ch, "voltage_limit"),
         max_fn=lambda coord: coord.effective_max_voltage,
-        set_fn=lambda coord, val: coord.async_set_voltage_limit(val),
-        is_supported_fn=lambda coord: coord.data.voltage_limit is not None,
+        set_fn=lambda coord, val, ch: (
+            coord.async_set_voltage_limit(val)
+            if ch == 1
+            else coord.async_set_voltage_limit(val, channel=ch)
+        ),
+        is_channel_supported_fn=lambda coord, ch: (
+            coord.data.get_channel_config(ch, "voltage_limit") is not None
+        ),
     ),
     ScpiPsuNumberEntityDescription(
         key="overcurrent_limit",
@@ -78,12 +92,19 @@ NUMBERS: tuple[ScpiPsuNumberEntityDescription, ...] = (
         device_class=NumberDeviceClass.CURRENT,
         entity_category=EntityCategory.CONFIG,
         native_min_value=0.0,
-        native_step=0.01,
+        native_step=0.001,
         mode=NumberMode.BOX,
-        value_fn=lambda d: d.current_limit,
+        per_channel=True,
+        channel_value_fn=lambda d, ch: d.get_channel_config(ch, "current_limit"),
         max_fn=lambda coord: coord.effective_max_current,
-        set_fn=lambda coord, val: coord.async_set_current_limit(val),
-        is_supported_fn=lambda coord: coord.data.current_limit is not None,
+        set_fn=lambda coord, val, ch: (
+            coord.async_set_current_limit(val)
+            if ch == 1
+            else coord.async_set_current_limit(val, channel=ch)
+        ),
+        is_channel_supported_fn=lambda coord, ch: (
+            coord.data.get_channel_config(ch, "current_limit") is not None
+        ),
     ),
 )
 
@@ -95,7 +116,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up SCPI PSU number entities."""
     coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    pending = {description.key: description for description in NUMBERS}
+    channels = range(1, max(1, coordinator.identity.channels) + 1)
+    pending: dict[tuple[str, int], ScpiPsuNumberEntityDescription] = {
+        (description.key, ch): description for ch in channels for description in NUMBERS
+    }
     unsubscribe: Callable[[], None] | None = None
 
     @callback
@@ -108,15 +132,20 @@ async def async_setup_entry(
     @callback
     def add_supported_entities() -> None:
         supported = [
-            description
-            for description in pending.values()
-            if description.is_supported_fn(coordinator)
+            (key_ch, description)
+            for key_ch, description in pending.items()
+            if description.is_channel_supported_fn(coordinator, key_ch[1])
         ]
         if not supported:
             return
-        for description in supported:
-            del pending[description.key]
-        async_add_entities([ScpiPsuNumber(coordinator, description) for description in supported])
+        for key_ch, _ in supported:
+            del pending[key_ch]
+        async_add_entities(
+            [
+                ScpiPsuNumber(coordinator, description, channel=key_ch[1])
+                for key_ch, description in supported
+            ]
+        )
         if not pending:
             stop_discovery()
 
@@ -135,13 +164,14 @@ class ScpiPsuNumber(ScpiPsuDescribedEntity[ScpiPsuNumberEntityDescription], Numb
         self,
         coordinator: ScpiPsuCoordinator,
         description: ScpiPsuNumberEntityDescription,
+        channel: int = 1,
     ) -> None:
-        super().__init__(coordinator, description)
+        super().__init__(coordinator, description, channel=channel)
         self._attr_native_max_value = description.max_fn(coordinator)
 
     @property
     def native_value(self) -> float | None:
-        return self.entity_description.value_fn(self.coordinator.data)
+        return self.get_described_value()
 
     async def async_set_native_value(self, value: float) -> None:
-        await self.entity_description.set_fn(self.coordinator, value)
+        await self.entity_description.set_fn(self.coordinator, value, self.channel)

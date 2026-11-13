@@ -56,6 +56,10 @@ class ChannelTelemetry:
     opp_tripped: bool | None = None
     status_text: str | None = STATUS_ACTIVE
     fault_alarm: bool | None = None
+    voltage_setpoint: float | None = None
+    current_setpoint: float | None = None
+    voltage_limit: float | None = None
+    current_limit: float | None = None
 
     def update_snapshot(
         self, snap: TelemetrySnapshot | None, requested_fields: Collection[str] = ()

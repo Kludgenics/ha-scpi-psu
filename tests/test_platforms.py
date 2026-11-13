@@ -329,6 +329,8 @@ async def test_number_entities(hass: HomeAssistant) -> None:
     num_map = {ent.entity_description.key: ent for ent in added}
     assert num_map["voltage_setpoint"].native_value == 5.0
     assert num_map["current_setpoint"].native_value == 2.0
+    assert num_map["current_setpoint"].native_step == 0.001
+    assert num_map["overcurrent_limit"].native_step == 0.001
     assert num_map["voltage_setpoint"].native_max_value == 60.0
 
     with patch.object(coordinator, "async_set_voltage", new_callable=AsyncMock) as mock_v:
@@ -388,3 +390,88 @@ def test_master_output_requires_all_channels_to_be_known_for_off() -> None:
     assert data.all_outputs_enabled is True
     data.channels[2].output_enabled = False
     assert data.all_outputs_enabled is False
+
+
+async def test_multichannel_sensor_binary_sensor_and_number_entities(
+    hass: HomeAssistant,
+) -> None:
+    from custom_components.scpi_psu.scpi_psu_client.models import PsuIdentity
+
+    entry, coordinator = _setup_coordinator(
+        hass,
+        "test_multi_ch_entry",
+        ScpiPsuData(
+            connected=True,
+            responding=True,
+            channel_count=2,
+            channels={
+                1: ChannelTelemetry(
+                    channel=1,
+                    voltage=5.0,
+                    current=1.0,
+                    power=5.0,
+                    status_text="Active",
+                    ovp_tripped=False,
+                    ocp_tripped=False,
+                    voltage_setpoint=5.0,
+                    current_setpoint=1.0,
+                    voltage_limit=10.0,
+                    current_limit=2.0,
+                ),
+                2: ChannelTelemetry(
+                    channel=2,
+                    voltage=12.0,
+                    current=0.5,
+                    power=6.0,
+                    status_text="Active",
+                    ovp_tripped=True,
+                    ocp_tripped=False,
+                    voltage_setpoint=12.0,
+                    current_setpoint=0.5,
+                    voltage_limit=20.0,
+                    current_limit=1.5,
+                ),
+            },
+        ),
+    )
+    coordinator.client.identity = PsuIdentity(
+        manufacturer="Rigol",
+        model="DP832",
+        serial_number="123",
+        firmware="1.0",
+        raw_idn="Rigol,DP832,123,1.0",
+        profile_key="standard",
+        hw_max_voltage=30.0,
+        hw_max_current=3.0,
+        channels=2,
+    )
+
+    sensors: list[sensor.ScpiPsuSensor] = await _collect_entities(sensor, hass, entry)
+    assert len(sensors) == 9  # 4 per-channel * 2 + 1 error_register
+    ch2_voltage = next(
+        s for s in sensors if s.entity_description.key == "voltage" and s.channel == 2
+    )
+    assert ch2_voltage.native_value == 12.0
+    assert ch2_voltage.unique_id == "test_multi_ch_entry_ch2_voltage"
+
+    bin_sensors: list[binary_sensor.ScpiPsuBinarySensor] = await _collect_entities(
+        binary_sensor, hass, entry
+    )
+    assert len(bin_sensors) == 5  # 2 per-channel (ovp, ocp) * 2 + 1 connected
+    ch2_ovp = next(
+        b for b in bin_sensors if b.entity_description.key == "ovp_tripped" and b.channel == 2
+    )
+    assert ch2_ovp.is_on is True
+    assert ch2_ovp.unique_id == "test_multi_ch_entry_ch2_ovp_tripped"
+
+    numbers: list[number.ScpiPsuNumber] = await _collect_entities(number, hass, entry)
+    assert len(numbers) == 8  # 4 per-channel * 2
+    ch2_v_set = next(
+        n for n in numbers if n.entity_description.key == "voltage_setpoint" and n.channel == 2
+    )
+    assert ch2_v_set.native_value == 12.0
+    assert ch2_v_set.unique_id == "test_multi_ch_entry_ch2_voltage_setpoint"
+
+    with patch.object(coordinator, "async_set_voltage", new_callable=AsyncMock) as mock_v:
+        await ch2_v_set.async_set_native_value(15.0)
+        mock_v.assert_awaited_once_with(15.0, channel=2)

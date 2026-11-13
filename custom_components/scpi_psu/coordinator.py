@@ -68,7 +68,31 @@ class ScpiPsuData:
     @property
     def ch1(self) -> ChannelTelemetry:
         """Return primary Channel 1 telemetry."""
-        return self.channels.get(1) or ChannelTelemetry(channel=1, status_text=STATUS_UNRESPONSIVE)
+        return self.channel_telemetry(1)
+
+    def channel_telemetry(self, channel: int) -> ChannelTelemetry:
+        """Return telemetry for a specific channel."""
+        return self.channels.get(channel) or ChannelTelemetry(
+            channel=channel, status_text=STATUS_UNRESPONSIVE
+        )
+
+    def set_channel_config(self, channel: int, key: str, value: float | None) -> None:
+        """Store a setpoint or protection limit for a channel."""
+        ch_data = self.channels.setdefault(channel, ChannelTelemetry(channel=channel))
+        setattr(ch_data, key, value)
+        if channel == 1:
+            setattr(self, key, value)
+
+    def get_channel_config(self, channel: int, key: str) -> float | None:
+        """Read a setpoint or protection limit for a channel."""
+        ch_data = self.channels.get(channel)
+        if ch_data is not None:
+            val = getattr(ch_data, key, None)
+            if val is not None:
+                return val
+        if channel == 1:
+            return getattr(self, key, None)
+        return None
 
     @property
     def all_outputs_enabled(self) -> bool | None:
@@ -278,7 +302,10 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             self._state.apply_telemetry(snap, fields)
 
         now = time.monotonic()
-        if now - self._last_full_poll >= FULL_POLL_INTERVAL or self._state.voltage_setpoint is None:
+        full_poll = (
+            now - self._last_full_poll >= FULL_POLL_INTERVAL or self._state.voltage_setpoint is None
+        )
+        if full_poll:
             updates = await self.client.get_config_registers()
             self._state.system_error = await self.client.get_system_error()
             self._last_full_poll = now
@@ -287,7 +314,17 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
 
         for key, value in updates.items():
             if value is not None:
-                setattr(self._state, key, value)
+                self._state.set_channel_config(1, key, value)
+
+        for ch in range(2, self.identity.channels + 1):
+            ch_updates = (
+                await self.client.get_config_registers(channel=ch)
+                if full_poll
+                else await self.client.get_setpoints(channel=ch)
+            )
+            for key, value in ch_updates.items():
+                if value is not None:
+                    self._state.set_channel_config(ch, key, value)
 
         self._state.connected = self.client.is_connected
         return self._state
@@ -351,20 +388,23 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
         ceiling: float,
         label: str,
         unit: str,
-        setter: Callable[[float], Awaitable[float]],
+        setter: Callable[..., Awaitable[float]],
         state_attr: str,
+        channel: int = 1,
     ) -> None:
         clamped = self._clamp_value(value, ceiling, label, unit)
         try:
-            actual = await setter(clamped)
+            actual = (
+                await setter(clamped) if channel == 1 else await setter(clamped, channel=channel)
+            )
         except Exception, asyncio.CancelledError:
-            setattr(self._state, state_attr, None)
+            self._state.set_channel_config(channel, state_attr, None)
             self._publish_state()
             raise
-        setattr(self._state, state_attr, round(actual, 3))
+        self._state.set_channel_config(channel, state_attr, round(actual, 3))
         self._publish_state()
 
-    async def async_set_voltage(self, value: float) -> None:
+    async def async_set_voltage(self, value: float, channel: int = 1) -> None:
         await self._async_set_clamped_float(
             value,
             self.effective_max_voltage,
@@ -372,9 +412,10 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             "V",
             self.client.set_voltage,
             "voltage_setpoint",
+            channel=channel,
         )
 
-    async def async_set_current(self, value: float) -> None:
+    async def async_set_current(self, value: float, channel: int = 1) -> None:
         await self._async_set_clamped_float(
             value,
             self.effective_max_current,
@@ -382,9 +423,10 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             "A",
             self.client.set_current,
             "current_setpoint",
+            channel=channel,
         )
 
-    async def async_set_voltage_limit(self, value: float) -> None:
+    async def async_set_voltage_limit(self, value: float, channel: int = 1) -> None:
         await self._async_set_clamped_float(
             value,
             self.effective_max_voltage,
@@ -392,9 +434,10 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             "V",
             self.client.set_voltage_limit,
             "voltage_limit",
+            channel=channel,
         )
 
-    async def async_set_current_limit(self, value: float) -> None:
+    async def async_set_current_limit(self, value: float, channel: int = 1) -> None:
         await self._async_set_clamped_float(
             value,
             self.effective_max_current,
@@ -402,6 +445,7 @@ class ScpiPsuCoordinator(DataUpdateCoordinator[ScpiPsuData]):
             "A",
             self.client.set_current_limit,
             "current_limit",
+            channel=channel,
         )
 
     async def async_reset_errors(self) -> None:
@@ -440,7 +484,9 @@ class ScpiPsuEntity(CoordinatorEntity[ScpiPsuCoordinator]):
 class ScpiDescriptionMixin[ValueT](EntityDescription):
     """Shared declarative fields for SCPI PSU entity descriptions."""
 
-    value_fn: Callable[[ScpiPsuData], ValueT]
+    value_fn: Callable[[ScpiPsuData], ValueT] | None = None
+    channel_value_fn: Callable[[ScpiPsuData, int], ValueT] | None = None
+    per_channel: bool = False
     measurement_field: str | None = None
     is_supported_fn: Callable[[ScpiPsuCoordinator], bool] = lambda _: True
     device_info_fn: Callable[[ScpiPsuCoordinator], DeviceInfo | ChildDeviceInfo] = lambda coord: (
@@ -451,13 +497,35 @@ class ScpiDescriptionMixin[ValueT](EntityDescription):
 class ScpiPsuDescribedEntity[DescT: ScpiDescriptionMixin[Any]](ScpiPsuEntity):
     """Base entity initialized from a declarative description."""
 
-    def __init__(self, coordinator: ScpiPsuCoordinator, description: DescT) -> None:
+    entity_description: DescT
+
+    def __init__(
+        self,
+        coordinator: ScpiPsuCoordinator,
+        description: DescT,
+        channel: int = 1,
+    ) -> None:
         super().__init__(coordinator)
         self.entity_description = description
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
-        self._attr_device_info = description.device_info_fn(coordinator)
-        if description.measurement_field:
-            self._tracked_fields = ((description.measurement_field, 1),)
+        self.channel = channel
+        if description.per_channel:
+            prefix = f"_ch{channel}" if coordinator.identity.channels > 1 else ""
+            self._attr_unique_id = f"{coordinator.entry.entry_id}{prefix}_{description.key}"
+            self._attr_device_info = coordinator.channel_device_info(channel)
+            if description.measurement_field:
+                self._tracked_fields = ((description.measurement_field, channel),)
+        else:
+            self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
+            self._attr_device_info = description.device_info_fn(coordinator)
+            if description.measurement_field:
+                self._tracked_fields = ((description.measurement_field, 1),)
+
+    def get_described_value(self) -> Any:
+        """Evaluate the description value function for this entity."""
+        if self.entity_description.channel_value_fn is not None:
+            return self.entity_description.channel_value_fn(self.coordinator.data, self.channel)
+        assert self.entity_description.value_fn is not None
+        return self.entity_description.value_fn(self.coordinator.data)
 
 
 def setup_described_entities[DescT: ScpiDescriptionMixin[Any]](
@@ -465,14 +533,17 @@ def setup_described_entities[DescT: ScpiDescriptionMixin[Any]](
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
     descriptions: Iterable[DescT],
-    entity_cls: Callable[[ScpiPsuCoordinator, DescT], Entity],
+    entity_cls: Callable[..., Entity],
 ) -> None:
     """Register supported described entities for a config entry."""
     coordinator: ScpiPsuCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
-            entity_cls(coordinator, description)
-            for description in descriptions
-            if description.is_supported_fn(coordinator)
-        ]
-    )
+    entities: list[Entity] = []
+    channels = range(1, max(1, coordinator.identity.channels) + 1)
+    for description in descriptions:
+        if not description.is_supported_fn(coordinator):
+            continue
+        if description.per_channel:
+            entities.extend(entity_cls(coordinator, description, channel=ch) for ch in channels)
+        else:
+            entities.append(entity_cls(coordinator, description))
+    async_add_entities(entities)

@@ -48,7 +48,8 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
-        value_fn=lambda d: d.ch1.voltage,
+        per_channel=True,
+        channel_value_fn=lambda d, ch: d.channel_telemetry(ch).voltage,
         measurement_field=FIELD_VOLTAGE,
     ),
     ScpiPsuSensorEntityDescription(
@@ -58,7 +59,8 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.CURRENT,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
-        value_fn=lambda d: d.ch1.current,
+        per_channel=True,
+        channel_value_fn=lambda d, ch: d.channel_telemetry(ch).current,
         measurement_field=FIELD_CURRENT,
     ),
     ScpiPsuSensorEntityDescription(
@@ -68,14 +70,16 @@ SENSORS: tuple[ScpiPsuSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=1,
-        value_fn=lambda d: d.ch1.power,
+        per_channel=True,
+        channel_value_fn=lambda d, ch: d.channel_telemetry(ch).power,
         measurement_field=FIELD_POWER,
     ),
     ScpiPsuSensorEntityDescription(
         key="status",
         name="Status",
         icon="mdi:power-settings",
-        value_fn=lambda d: d.ch1.status_text,
+        per_channel=True,
+        channel_value_fn=lambda d, ch: d.channel_telemetry(ch).status_text,
         measurement_field=FIELD_STATUS_TEXT,
     ),
     ScpiPsuSensorEntityDescription(
@@ -118,4 +122,4 @@ class ScpiPsuSensor(ScpiPsuDescribedEntity[ScpiPsuSensorEntityDescription], Sens
 
     @property
     def native_value(self) -> Any:
-        return self.entity_description.value_fn(self.coordinator.data)
+        return self.get_described_value()

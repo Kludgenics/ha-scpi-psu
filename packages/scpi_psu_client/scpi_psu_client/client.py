@@ -471,8 +471,13 @@ class ScpiPsuClient:
                 results[ch] = snap
         return results if results else None
 
-    async def _set_and_verify_float(self, set_cmd: str, get_cmd: str, fallback: float) -> float:
-        async with self._lock:
+    async def _set_and_verify_float(
+        self, set_cmd: str, get_cmd: str, fallback: float, channel: int | None = None
+    ) -> float:
+        restore = channel is not None and channel != 1
+        async with self._lock, self._restore_primary_channel_unlocked(restore=restore):
+            if channel is not None and self.identity.channels > 1:
+                await self._select_channel_unlocked(channel)
             await self._write_unlocked(set_cmd)
             readback = parse_strict_float(await self._query_unlocked(get_cmd))
             return readback if readback is not None else fallback
@@ -509,32 +514,36 @@ class ScpiPsuClient:
                 await self._write_unlocked(ch_cmd)
             return enabled
 
-    async def set_voltage(self, value: float) -> float:
+    async def set_voltage(self, value: float, channel: int | None = None) -> float:
         return await self._set_and_verify_float(
             self.profile.format_set_voltage(value),
             self.profile.cmd_get_voltage_setpoint,
             value,
+            channel=channel,
         )
 
-    async def set_current(self, value: float) -> float:
+    async def set_current(self, value: float, channel: int | None = None) -> float:
         return await self._set_and_verify_float(
             self.profile.format_set_current(value),
             self.profile.cmd_get_current_setpoint,
             value,
+            channel=channel,
         )
 
-    async def set_voltage_limit(self, value: float) -> float:
+    async def set_voltage_limit(self, value: float, channel: int | None = None) -> float:
         return await self._set_and_verify_float(
             self.profile.format_set_voltage_limit(value),
             self.profile.cmd_get_voltage_limit,
             value,
+            channel=channel,
         )
 
-    async def set_current_limit(self, value: float) -> float:
+    async def set_current_limit(self, value: float, channel: int | None = None) -> float:
         return await self._set_and_verify_float(
             self.profile.format_set_current_limit(value),
             self.profile.cmd_get_current_limit,
             value,
+            channel=channel,
         )
 
     async def get_system_error(self) -> str | None:
@@ -602,11 +611,18 @@ class ScpiPsuClient:
             ("current_setpoint", prof.cmd_get_current_setpoint, max_i_hw),
         ]
 
-    async def get_setpoints(self) -> dict[str, float | None]:
-        async with self._lock:
+    async def get_setpoints(self, channel: int | None = None) -> dict[str, float | None]:
+        restore = channel is not None and channel != 1
+        async with self._lock, self._restore_primary_channel_unlocked(restore=restore):
+            if (
+                channel is not None
+                and self.identity.channels > 1
+                and not await self._select_channel_unlocked(channel)
+            ):
+                return {"voltage_setpoint": None, "current_setpoint": None}
             return await self._query_float_group_unlocked(self._setpoint_spec())
 
-    async def get_config_registers(self) -> dict[str, float | None]:
+    async def get_config_registers(self, channel: int | None = None) -> dict[str, float | None]:
         prof = self.profile
         max_v_hw, max_i_hw = self._hardware_ceilings()
         spec = [
@@ -614,7 +630,14 @@ class ScpiPsuClient:
             ("current_limit", prof.cmd_get_current_limit, max_i_hw),
             *self._setpoint_spec(),
         ]
-        async with self._lock:
+        restore = channel is not None and channel != 1
+        async with self._lock, self._restore_primary_channel_unlocked(restore=restore):
+            if (
+                channel is not None
+                and self.identity.channels > 1
+                and not await self._select_channel_unlocked(channel)
+            ):
+                return dict.fromkeys(key for key, _, _ in spec)
             return await self._query_float_group_unlocked(spec)
 
     async def clear_faults(self) -> None:

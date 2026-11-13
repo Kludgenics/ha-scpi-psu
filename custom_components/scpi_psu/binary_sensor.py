@@ -45,7 +45,8 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
         key="fault",
         name="Fault",
         device_class=BinarySensorDeviceClass.PROBLEM,
-        value_fn=lambda d: d.ch1.fault_alarm,
+        per_channel=True,
+        channel_value_fn=lambda d, ch: d.channel_telemetry(ch).fault_alarm,
         measurement_field=FIELD_FAULT_ALARM,
     ),
     ScpiPsuBinarySensorEntityDescription(
@@ -62,7 +63,8 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
         name="Overvoltage Protection (OVP)",
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.ch1.ovp_tripped,
+        per_channel=True,
+        channel_value_fn=lambda d, ch: d.channel_telemetry(ch).ovp_tripped,
         measurement_field=FIELD_OVP_TRIPPED,
         is_supported_fn=lambda coord: coord.profile.supports_ovp,
     ),
@@ -71,7 +73,8 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
         name="Overcurrent Protection (OCP)",
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.ch1.ocp_tripped,
+        per_channel=True,
+        channel_value_fn=lambda d, ch: d.channel_telemetry(ch).ocp_tripped,
         measurement_field=FIELD_OCP_TRIPPED,
         is_supported_fn=lambda coord: coord.profile.supports_ocp,
     ),
@@ -80,7 +83,8 @@ BINARY_SENSORS: tuple[ScpiPsuBinarySensorEntityDescription, ...] = (
         name="Over-temperature Protection (OTP)",
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.ch1.opp_tripped,
+        per_channel=True,
+        channel_value_fn=lambda d, ch: d.channel_telemetry(ch).opp_tripped,
         measurement_field=FIELD_OPP_TRIPPED,
         is_supported_fn=lambda coord: coord.profile.supports_opp,
     ),
@@ -105,4 +109,4 @@ class ScpiPsuBinarySensor(
 
     @property
     def is_on(self) -> bool | None:
-        return self.entity_description.value_fn(self.coordinator.data)
+        return self.get_described_value()

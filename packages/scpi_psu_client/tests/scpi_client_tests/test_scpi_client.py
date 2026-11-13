@@ -710,6 +710,43 @@ async def test_error_recovery_does_not_issue_query_without_identity_boundary() -
         assert b"VOLT?\n" not in [call.args[0] for call in writer.write.call_args_list]
 
 
+async def test_explicit_channel_setpoint_selects_and_restores_primary_channel() -> None:
+    client = ScpiPsuClient(
+        "socket://127.0.0.1:5025",
+        initial_idn="Rigol,DP832,123,1.0",
+        command_delay=0,
+        write_delay=0,
+    )
+    selected = 1
+    setpoints = {1: 5.0, 2: 12.0}
+    selection_history: list[int] = []
+
+    def responder(cmd: str) -> str:
+        nonlocal selected
+        if cmd.startswith("INST:NSEL "):
+            selected = int(cmd.rsplit(" ", 1)[1])
+            selection_history.append(selected)
+        elif cmd.startswith("VOLT "):
+            setpoints[selected] = float(cmd.rsplit(" ", 1)[1])
+        elif cmd == "VOLT?;:CURR?":
+            return f"{setpoints[selected]:.3f};1.000"
+        elif cmd == "VOLT?":
+            return f"{setpoints[selected]:.3f}"
+        elif cmd == "CURR?":
+            return "1.000"
+        return ""
+
+    with mock_serial_responder(responder):
+        assert await client.set_voltage(15.0, channel=2) == 15.0
+        assert setpoints == {1: 5.0, 2: 15.0}
+        assert selection_history[-2:] == [2, 1]
+        assert await client.get_setpoints(channel=2) == {
+            "voltage_setpoint": 15.0,
+            "current_setpoint": 1.0,
+        }
+        assert selection_history[-2:] == [2, 1]
+
+
 @pytest.mark.parametrize("reply", ["0x0000", "0x001A", '0,"No error"'])
 async def test_system_error_accepts_hex_register_without_losing_alignment(reply: str) -> None:
     client = ScpiPsuClient(
